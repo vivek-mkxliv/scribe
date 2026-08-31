@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "scribe"
+version = "0.1.0"
+description = "System Context & Repository Intelligence Bridge Engine - AST/Knowledge-Graph driven documentation generator"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1",
+    "rich>=13.0",
+    "openai>=1.40",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.34"]
+tiktoken = ["tiktoken>=0.7"]
+# The real AST/knowledge-graph extractor. Installing scribe with this extra means the
+# `graphify` executable lands in the SAME environment as scribe -- no separate `uv tool
+# install`/`pipx install` step, no PATH setup. `extractor._find_graphify_executable()`
+# looks next to the running interpreter first specifically so this works even when the
+# venv isn't "activated". Kept optional (not a hard dependency) since it pulls in ~25
+# tree-sitter grammars + networkx/numpy -- a real cost on locked-down/air-gapped
+# machines, which is exactly the audience that still has the native fallback extractor.
+graphifyy = ["graphifyy>=0.9"]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+all = ["anthropic>=0.34", "tiktoken>=0.7", "graphifyy>=0.9"]
+
+[project.scripts]
+scribe = "scribe.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/scribe"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+
+

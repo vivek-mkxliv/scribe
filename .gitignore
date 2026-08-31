@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+# `docs/` is scribe's own default --output target (self-dogfooding, generated content) --
+# ignore everything generated there except the one hand-verified reference doc.
+docs/*
+!docs/GRAPHIFYY_CONTRACT.md
+.env
+.scribe_cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
