@@ -22,14 +22,25 @@ from scribe.extraction.scan_config import iter_repo_files
 DEFAULT_CACHE_ROOT = Path.home() / ".scribe_cache"
 
 
+def repo_identity_key(repo_path: Path) -> str:
+    """Stable key for a repo, independent of its content (just its absolute path).
+
+    Reused wherever a cache needs to persist across content changes -- e.g. the doc
+    structure plan (`generation/doc_plan.py`), which should stay stable across
+    regenerations unless explicitly refreshed via `--refresh-plan`, unlike the
+    content-hash-keyed extraction cache below, which is *supposed* to invalidate on
+    every change.
+    """
+    return hashlib.sha256(str(repo_path.resolve()).encode("utf-8")).hexdigest()[:16]
+
+
 def _cache_dir_for_repo(repo_path: Path, cache_root: Path) -> Path:
     """A per-repo subfolder of `cache_root`, keyed by the repo's absolute path.
 
     Keying by path (not just content hash) means two different repos can
     never collide in a shared, user-level cache root.
     """
-    repo_key = hashlib.sha256(str(repo_path.resolve()).encode("utf-8")).hexdigest()[:16]
-    return cache_root / repo_key
+    return cache_root / repo_identity_key(repo_path)
 
 
 def compute_repo_hash(repo_path: Path) -> str:
@@ -61,6 +72,27 @@ def compute_repo_hash(repo_path: Path) -> str:
 
     digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
     return digest
+
+
+def compute_paths_hash(repo_path: Path, relative_paths: list[str]) -> str | None:
+    """Hash just the given repo-relative paths' (size, mtime) -- for per-page staleness.
+
+    Unlike `compute_repo_hash` (the whole repo), this scopes the signal to the specific files
+    a doc plan page says it's grounded in (`DocPage.sources`), so an unrelated change elsewhere
+    in the repo doesn't force that page to regenerate. Returns `None` if none of the given paths
+    actually exist (nothing meaningful to hash -- caller should treat that page conservatively,
+    i.e. as always needing regeneration, rather than silently never regenerating it).
+    """
+    entries: list[str] = []
+    for rel_path in sorted(relative_paths):
+        try:
+            stat = (repo_path / rel_path).stat()
+        except OSError:
+            continue
+        entries.append(f"{rel_path}:{stat.st_size}:{stat.st_mtime_ns}")
+    if not entries:
+        return None
+    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
 
 
 def load_cached_context(

@@ -9,7 +9,7 @@ import pytest
 from scribe.config import ScribeConfig
 from scribe.constants import DOC_SUITE, AudienceMode
 from scribe.generation.doc_plan import PLANNER_MARKER, heuristic_doc_plan
-from scribe.pipeline import CostConfirmationRequiredError, _build_bounded_prompt, run
+from scribe.pipeline import CostConfirmationRequiredError, _build_bounded_digest_text, run
 from scribe.providers import llm_client
 
 PLAN_RESPONSE = json.dumps(
@@ -100,7 +100,7 @@ def test_run_proceeds_with_chunked_generation_when_assume_yes(tmp_path, monkeypa
     assert any("Summarize this subsystem" not in call for call in fake_client.calls)
 
 
-def test_build_bounded_prompt_reports_still_over_budget_when_absurdly_tight():
+def test_build_bounded_digest_text_reports_still_over_budget_when_absurdly_tight():
     from scribe.extraction.models import GraphContext, GraphStats, ModuleNode
 
     context = GraphContext(
@@ -110,7 +110,7 @@ def test_build_bounded_prompt_reports_still_over_budget_when_absurdly_tight():
         stats=GraphStats(file_count=1, total_loc=1, languages={"python": 1}),
         source="native_fallback",
     )
-    _prompt, _tokens, still_over = _build_bounded_prompt(
+    _digest_text, _tokens, still_over = _build_bounded_digest_text(
         "project context",
         context,
         heuristic_doc_plan(AudienceMode.LEAN_TECHNICAL),

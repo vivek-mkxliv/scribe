@@ -11,6 +11,7 @@ generated docs (`.scribe_plan.json`) for quick human reference.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,9 +24,56 @@ from scribe.providers.llm_client import LLMClient
 # without inspecting the full rendered template.
 PLANNER_MARKER = "SCRIBE DOCUMENTATION STRUCTURE PLANNER"
 
+# Same purpose as PLANNER_MARKER, but for a revision call (see `derive_doc_plan_revision_via_llm`).
+REVISION_MARKER = "SCRIBE DOCUMENTATION STRUCTURE REVISION"
+
 
 class DocPlanContractError(RuntimeError):
     """Raised when a doc plan (LLM-proposed or user-supplied) doesn't parse/validate."""
+
+
+def _extract_json_object(text: str) -> str:
+    """Best-effort extraction of a single JSON object from a raw LLM response.
+
+    Local models frequently ignore "output ONLY JSON" instructions and wrap the object in
+    prose and/or a markdown code fence (observed in practice: "Here is the proposed
+    documentation structure in JSON format:\n```json\n{...}\n```"). Strips a leading fence if
+    present, then locates the first "{" and its brace-balanced matching "}" -- respecting JSON
+    string literals so a "{" inside quoted text doesn't throw off the count -- and returns just
+    that slice. Falls back to the original (stripped) text if no "{" is found, so `json.loads`
+    still produces its own clear error rather than this silently swallowing a truly empty reply.
+    """
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[a-zA-Z]*\n?", "", stripped)
+        stripped = re.sub(r"\n?```\s*$", "", stripped)
+
+    start = stripped.find("{")
+    if start == -1:
+        return stripped
+
+    depth = 0
+    in_string = False
+    escape = False
+    for index in range(start, len(stripped)):
+        char = stripped[index]
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return stripped[start : index + 1]
+    return stripped[start:]
 
 
 @dataclass
@@ -33,6 +81,9 @@ class DocPage:
     id: str  # relative path from output_dir, e.g. "user-guides/01-gui.md"
     title: str
     description: str = ""
+    # Real repo-relative file paths this page is grounded in (from the Knowledge Graph), used
+    # for per-page content staleness detection -- NOT required, and never invented if unknown.
+    sources: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -41,6 +92,10 @@ class DocSection:
     title: str
     pages: list[DocPage] = field(default_factory=list)
     description: str = ""
+    # Why THIS section has THIS many pages, citing a concrete signal (package/entry-point/CLI
+    # subcommand count) -- forces the planner to justify each section individually instead of
+    # only the plan as a whole, which is what actually prevents uniform, arbitrary page counts.
+    rationale: str = ""
 
 
 @dataclass
@@ -77,8 +132,14 @@ class DocPlan:
                     "id": section.id,
                     "title": section.title,
                     "description": section.description,
+                    "rationale": section.rationale,
                     "pages": [
-                        {"id": page.id, "title": page.title, "description": page.description}
+                        {
+                            "id": page.id,
+                            "title": page.title,
+                            "description": page.description,
+                            "sources": page.sources,
+                        }
                         for page in section.pages
                     ],
                 }
@@ -96,7 +157,12 @@ class DocPlan:
             sections = []
             for raw_section in payload["sections"]:
                 pages = [
-                    DocPage(id=p["id"], title=p["title"], description=p.get("description", ""))
+                    DocPage(
+                        id=p["id"],
+                        title=p["title"],
+                        description=p.get("description", ""),
+                        sources=list(p.get("sources", []) or []),
+                    )
                     for p in raw_section["pages"]
                 ]
                 sections.append(
@@ -104,6 +170,7 @@ class DocPlan:
                         id=raw_section["id"],
                         title=raw_section["title"],
                         description=raw_section.get("description", ""),
+                        rationale=raw_section.get("rationale", ""),
                         pages=pages,
                     )
                 )
@@ -126,7 +193,7 @@ class DocPlan:
     @staticmethod
     def from_json(text: str, *, mode: AudienceMode | None = None) -> DocPlan:
         try:
-            payload = json.loads(text)
+            payload = json.loads(_extract_json_object(text))
         except json.JSONDecodeError as exc:
             snippet = text[:200].replace("\n", "\\n")
             raise DocPlanContractError(
@@ -159,6 +226,8 @@ def derive_doc_plan_via_llm(
     graph_context: GraphContext,
     mode: AudienceMode,
     on_status: Callable[[str], None] | None = None,
+    cli_surface_text: str = "",
+    user_notes_text: str = "",
 ) -> DocPlan:
     """Ask the LLM to propose a documentation structure grounded in `graph_context`.
 
@@ -171,7 +240,7 @@ def derive_doc_plan_via_llm(
         if on_status:
             on_status(message)
 
-    prompt = build_planning_prompt(project_context, graph_context, mode)
+    prompt = build_planning_prompt(project_context, graph_context, mode, cli_surface_text, user_notes_text)
     response = client.complete(prompt, model)
     try:
         return DocPlan.from_json(response, mode=mode)
@@ -188,6 +257,54 @@ def derive_doc_plan_via_llm(
         except DocPlanContractError as retry_exc:
             status(f"Doc plan retry also failed ({retry_exc}); using the heuristic fallback structure.")
             return heuristic_doc_plan(mode)
+
+
+def derive_doc_plan_revision_via_llm(
+    client: LLMClient,
+    model: str,
+    project_context: str,
+    graph_context: GraphContext,
+    mode: AudienceMode,
+    current_plan: DocPlan,
+    current_justification: str,
+    revision_request: str,
+    on_status: Callable[[str], None] | None = None,
+    cli_surface_text: str = "",
+) -> DocPlan:
+    """Ask the LLM to revise `current_plan` per a freeform `revision_request`.
+
+    Retries once on a malformed response, like `derive_doc_plan_via_llm`. Unlike that function,
+    there's NO heuristic fallback here -- silently discarding the user's real, already-generated
+    structure in favor of a generic one on a parse failure would be a much worse surprise than
+    just failing the revision outright and asking them to retry.
+    """
+    from scribe.generation.prompt_builder import build_revision_prompt  # local: avoids an import cycle
+
+    def status(message: str) -> None:
+        if on_status:
+            on_status(message)
+
+    prompt = build_revision_prompt(
+        project_context,
+        graph_context,
+        mode,
+        current_plan,
+        current_justification,
+        revision_request,
+        cli_surface_text,
+    )
+    response = client.complete(prompt, model)
+    try:
+        return DocPlan.from_json(response, mode=mode)
+    except DocPlanContractError as exc:
+        status(f"Revision response was invalid ({exc}); asking the model to retry once.")
+        followup = (
+            f"{prompt}\n\n---PREVIOUS RESPONSE (INVALID)---\n{response}\n\n---INSTRUCTIONS---\n"
+            f"Your previous response did not parse as the required JSON contract: {exc}. "
+            "Resend ONLY the corrected JSON object, nothing else."
+        )
+        retry_response = client.complete(followup, model)
+        return DocPlan.from_json(retry_response, mode=mode)  # let a 2nd failure propagate
 
 
 def reconcile_doc_plan(

@@ -1,4 +1,4 @@
-"""Tests for the LLM repair loop in `pipeline._generate_with_repair`.
+"""Tests for the LLM repair loop in `generation.page_writer.generate_with_repair`.
 
 Uses a scripted fake client so the repair loop is proven correct without any
 real network/API dependency.
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from scribe.pipeline import GenerationFailedError, _generate_with_repair
+from scribe.generation.page_writer import GenerationFailedError, generate_with_repair
 
 DOC_IDS = ["README.md", "USER_MANUAL.md"]
 
@@ -42,7 +42,7 @@ class FakeLLMClient:
 
 def test_repair_loop_succeeds_immediately_on_valid_response():
     client = FakeLLMClient([VALID_RESPONSE])
-    documents = _generate_with_repair(
+    documents = generate_with_repair(
         client, "prompt", "model", DOC_IDS, max_repair_attempts=2, on_status=lambda _m: None
     )
     assert documents["README.md"] == "Body for README.md"
@@ -51,7 +51,7 @@ def test_repair_loop_succeeds_immediately_on_valid_response():
 
 def test_repair_loop_recovers_from_missing_document():
     client = FakeLLMClient([MISSING_DOC_RESPONSE, VALID_RESPONSE])
-    documents = _generate_with_repair(
+    documents = generate_with_repair(
         client, "prompt", "model", DOC_IDS, max_repair_attempts=2, on_status=lambda _m: None
     )
     assert set(documents) == set(DOC_IDS)
@@ -60,7 +60,7 @@ def test_repair_loop_recovers_from_missing_document():
 
 def test_repair_loop_recovers_from_qa_failure():
     client = FakeLLMClient([BAD_MERMAID_RESPONSE, VALID_RESPONSE])
-    documents = _generate_with_repair(
+    documents = generate_with_repair(
         client, "prompt", "model", DOC_IDS, max_repair_attempts=2, on_status=lambda _m: None
     )
     assert documents["README.md"] == "Body for README.md"
@@ -70,7 +70,7 @@ def test_repair_loop_recovers_from_qa_failure():
 def test_repair_loop_raises_after_exhausting_attempts():
     client = FakeLLMClient([MISSING_DOC_RESPONSE, MISSING_DOC_RESPONSE, MISSING_DOC_RESPONSE])
     with pytest.raises(GenerationFailedError):
-        _generate_with_repair(
+        generate_with_repair(
             client, "prompt", "model", DOC_IDS, max_repair_attempts=2, on_status=lambda _m: None
         )
     assert client.call_count == 3

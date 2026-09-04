@@ -6,7 +6,7 @@ from importlib import resources
 
 from scribe.constants import AUDIENCE_MODE_GUIDANCE, AudienceMode
 from scribe.extraction.models import GraphContext
-from scribe.generation.doc_plan import DocPlan
+from scribe.generation.doc_plan import DocPage, DocPlan
 
 REPAIR_FOLLOWUP_TEMPLATE = (
     "Your previous response did not match the required output contract: {issue_description}. "
@@ -21,44 +21,74 @@ def _load_template(name: str) -> str:
     return template_path.read_text(encoding="utf-8")
 
 
-def _render(project_context: str, graphifyy_context_text: str, doc_plan: DocPlan) -> str:
-    """Fill the master template. The one place that actually calls `.format()`."""
+def _render_target_page(page: DocPage) -> str:
+    return f'(doc="{page.id}") {page.title}: {page.description}'.rstrip(": ")
+
+
+def build_page_prompt(
+    project_context: str,
+    digest_text: str,
+    doc_plan: DocPlan,
+    target_page: DocPage,
+    *,
+    cli_surface_text: str = "",
+    org_context_text: str = "",
+) -> str:
+    """Fill the per-page template: write exactly `target_page` now.
+
+    The full `doc_plan` is still shown (for cross-link awareness of sibling pages), but the
+    output contract is scoped to this one page -- one LLM call produces one document, so each
+    page gets its own full `--max-tokens` budget instead of splitting one budget N ways.
+    """
     return _load_template("master_prompt.md").format(
         project_context=project_context,
-        graphifyy_context=graphifyy_context_text,
+        graphifyy_context=digest_text,
         audience_mode=doc_plan.mode.value,
         audience_guidance=AUDIENCE_MODE_GUIDANCE[doc_plan.mode],
         doc_plan=doc_plan.to_prompt_text(),
+        target_page=_render_target_page(target_page),
+        cli_surface=cli_surface_text,
+        org_context=org_context_text,
     )
 
 
-def build_prompt(
+def build_planning_prompt(
     project_context: str,
     graph_context: GraphContext,
-    doc_plan: DocPlan,
-    *,
-    max_graph_modules: int | None = None,
+    mode: AudienceMode,
+    cli_surface_text: str = "",
+    user_notes_text: str = "",
 ) -> str:
-    """Fill the master template with the extracted context and the finalized doc plan."""
-    return _render(project_context, graph_context.to_prompt_text(max_modules=max_graph_modules), doc_plan)
-
-
-def build_prompt_with_digest_text(project_context: str, digest_text: str, doc_plan: DocPlan) -> str:
-    """Fill the master template with a pre-rendered digest instead of a `GraphContext`.
-
-    Used by the chunked/map-reduce path (`generation/chunking.py`), where the "digest" is a
-    synthesis of per-package summaries rather than `GraphContext.to_prompt_text()`.
-    """
-    return _render(project_context, digest_text, doc_plan)
-
-
-def build_planning_prompt(project_context: str, graph_context: GraphContext, mode: AudienceMode) -> str:
     """Fill the documentation-structure planning template (see `generation/doc_plan.py`)."""
     return _load_template("planning_prompt.md").format(
         project_context=project_context,
         graphifyy_context=graph_context.to_prompt_text(),
         audience_mode=mode.value,
         audience_guidance=AUDIENCE_MODE_GUIDANCE[mode],
+        cli_surface=cli_surface_text,
+        user_notes=user_notes_text,
+    )
+
+
+def build_revision_prompt(
+    project_context: str,
+    graph_context: GraphContext,
+    mode: AudienceMode,
+    current_plan: DocPlan,
+    current_justification: str,
+    revision_request: str,
+    cli_surface_text: str = "",
+) -> str:
+    """Fill the documentation-structure revision template (see `generation/doc_plan.py`)."""
+    return _load_template("revision_prompt.md").format(
+        project_context=project_context,
+        graphifyy_context=graph_context.to_prompt_text(),
+        audience_mode=mode.value,
+        audience_guidance=AUDIENCE_MODE_GUIDANCE[mode],
+        cli_surface=cli_surface_text,
+        current_plan_json=current_plan.to_json(),
+        current_justification=current_justification or "_No justification doc found._",
+        revision_request=revision_request,
     )
 
 

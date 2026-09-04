@@ -109,3 +109,22 @@ def test_relative_output_dir_from_config_file_resolves_against_repo_not_cwd(tmp_
     assert result.exit_code == 0, result.output
     assert (other_repo / "generated" / "_dry_run_prompt.md").exists()
     assert not (tmp_path / "generated").exists()
+
+
+def test_org_context_command_scaffolds_template(tmp_path):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["org-context", "--repo", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "scribe.org.toml").exists()
+    assert "[org_context]" in (tmp_path / "scribe.org.toml").read_text(encoding="utf-8")
+
+
+def test_org_context_command_does_not_overwrite_existing_file(tmp_path):
+    (tmp_path / "scribe.org.toml").write_text("# hand-edited\n", encoding="utf-8")
+    runner = CliRunner()
+    result = runner.invoke(cli, ["org-context", "--repo", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "hand-edited" in (tmp_path / "scribe.org.toml").read_text(encoding="utf-8")
+    assert "already exists" in result.output

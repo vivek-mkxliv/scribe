@@ -16,6 +16,7 @@ from scribe.extraction import extractor
 from scribe.extraction.cache import (
     compute_repo_hash,
     load_cached_context,
+    repo_identity_key,
     store_cached_context,
 )
 from scribe.extraction.extractor import (
@@ -106,6 +107,25 @@ def test_build_native_context_reports_truncation_over_the_file_cap(tmp_path):
 
     assert context.stats.file_count == MAX_NATIVE_FILES
     assert any("cap" in message.lower() for message in statuses)
+
+
+def test_repo_identity_key_is_stable_and_content_independent(tmp_path):
+    repo_dir = tmp_path / "repo"
+    _write(repo_dir / "a.py", "import os\n")
+
+    key_before = repo_identity_key(repo_dir)
+    _write(repo_dir / "b.py", "import sys\n")  # content changes, path doesn't
+    key_after = repo_identity_key(repo_dir)
+
+    assert key_before == key_after
+
+
+def test_repo_identity_key_differs_across_repos(tmp_path):
+    repo_a = tmp_path / "repo_a"
+    repo_b = tmp_path / "repo_b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    assert repo_identity_key(repo_a) != repo_identity_key(repo_b)
 
 
 def test_cache_round_trip_stores_and_loads(tmp_path):

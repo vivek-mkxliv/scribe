@@ -10,8 +10,10 @@ from scribe.constants import DOC_SUITE, AudienceMode
 from scribe.extraction.models import GraphContext, GraphStats, ModuleNode
 from scribe.generation.doc_plan import (
     PLANNER_MARKER,
+    REVISION_MARKER,
     DocPlan,
     DocPlanContractError,
+    derive_doc_plan_revision_via_llm,
     derive_doc_plan_via_llm,
     heuristic_doc_plan,
     load_cached_doc_plan,
@@ -29,6 +31,7 @@ VALID_PLAN_JSON = json.dumps(
                 "id": "user-guides",
                 "title": "User Guides",
                 "description": "Execution guides",
+                "rationale": "2 distinct workflows (CLI, GUI) -> 2 pages.",
                 "pages": [
                     {"id": "user-guides/01-cli.md", "title": "CLI Guide", "description": "Using the CLI"},
                     {"id": "user-guides/02-gui.md", "title": "GUI Guide", "description": "Using the GUI"},
@@ -84,6 +87,25 @@ def test_doc_plan_to_prompt_text_includes_every_page():
 def test_doc_plan_rejects_malformed_json():
     with pytest.raises(DocPlanContractError):
         DocPlan.from_json("not json at all")
+
+
+def test_doc_plan_parses_json_wrapped_in_markdown_fence_and_prose():
+    """Regression test: a real local model (llama3.1:8b via Ollama) ignored the "output ONLY
+    JSON" instruction and replied with "Here is the proposed documentation structure in JSON
+    format:\n```json\n{...}\n```" -- this must still parse instead of hard-failing."""
+    wrapped = (
+        "Here is the proposed documentation structure in JSON format:\n\n```json\n"
+        + VALID_PLAN_JSON
+        + "\n```"
+    )
+    plan = DocPlan.from_json(wrapped)
+    assert plan.doc_ids == ["user-guides/01-cli.md", "user-guides/02-gui.md"]
+
+
+def test_doc_plan_parses_json_with_trailing_prose_and_no_fence():
+    wrapped = VALID_PLAN_JSON + "\n\nLet me know if you'd like any changes to this structure."
+    plan = DocPlan.from_json(wrapped)
+    assert plan.doc_ids == ["user-guides/01-cli.md", "user-guides/02-gui.md"]
 
 
 def test_doc_plan_rejects_missing_pages():
@@ -154,6 +176,84 @@ def test_derive_doc_plan_via_llm_falls_back_to_heuristic_after_two_failures():
     )
     assert plan.doc_ids == DOC_SUITE[AudienceMode.LEAN_TECHNICAL]
     assert client.call_count == 2
+
+
+def test_doc_plan_json_round_trip_preserves_section_rationale():
+    plan = DocPlan.from_json(VALID_PLAN_JSON)
+    assert plan.sections[0].rationale == "2 distinct workflows (CLI, GUI) -> 2 pages."
+
+    reloaded = DocPlan.from_json(plan.to_json())
+    assert reloaded.sections[0].rationale == plan.sections[0].rationale
+
+
+def test_doc_plan_from_json_defaults_missing_section_rationale_to_empty_string():
+    payload = json.loads(VALID_PLAN_JSON)
+    del payload["sections"][0]["rationale"]
+
+    plan = DocPlan.from_json_dict(payload)
+
+    assert plan.sections[0].rationale == ""
+
+
+def test_derive_doc_plan_revision_via_llm_succeeds_on_first_valid_response():
+    client = ScriptedLLMClient([VALID_PLAN_JSON])
+    current_plan = DocPlan.from_json(VALID_PLAN_JSON)
+
+    revised = derive_doc_plan_revision_via_llm(
+        client,
+        "model",
+        "ctx",
+        _graph_context(),
+        AudienceMode.OPERATOR_SPLIT,
+        current_plan,
+        "previous justification text",
+        "add a security section",
+        on_status=lambda _m: None,
+    )
+
+    assert revised.doc_ids == ["user-guides/01-cli.md", "user-guides/02-gui.md"]
+    assert client.call_count == 1
+    assert REVISION_MARKER in client.prompts[0]
+    assert "add a security section" in client.prompts[0]
+    assert "previous justification text" in client.prompts[0]
+
+
+def test_derive_doc_plan_revision_via_llm_recovers_from_one_malformed_response():
+    client = ScriptedLLMClient(["not json", VALID_PLAN_JSON])
+    current_plan = DocPlan.from_json(VALID_PLAN_JSON)
+
+    revised = derive_doc_plan_revision_via_llm(
+        client,
+        "model",
+        "ctx",
+        _graph_context(),
+        AudienceMode.OPERATOR_SPLIT,
+        current_plan,
+        "",
+        "tidy things up",
+        on_status=lambda _m: None,
+    )
+
+    assert revised.doc_ids == ["user-guides/01-cli.md", "user-guides/02-gui.md"]
+    assert client.call_count == 2
+
+
+def test_derive_doc_plan_revision_via_llm_raises_after_two_failures_no_heuristic_fallback():
+    client = ScriptedLLMClient(["not json", "still not json"])
+    current_plan = DocPlan.from_json(VALID_PLAN_JSON)
+
+    with pytest.raises(DocPlanContractError):
+        derive_doc_plan_revision_via_llm(
+            client,
+            "model",
+            "ctx",
+            _graph_context(),
+            AudienceMode.OPERATOR_SPLIT,
+            current_plan,
+            "",
+            "tidy things up",
+            on_status=lambda _m: None,
+        )
 
 
 def test_reconcile_doc_plan_returns_recommended_when_no_user_plan():

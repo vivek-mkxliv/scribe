@@ -98,8 +98,13 @@ class OpenAIClient:
         extra_kwargs: dict[str, object] = {}
         if temperature is not None:
             extra_kwargs["temperature"] = temperature
-        if max_tokens is not None:
-            extra_kwargs["max_tokens"] = max_tokens
+        # Always set an explicit cap (matching AnthropicClient's own `max_tokens or 8192`
+        # fallback below) rather than omitting the key entirely -- local/self-hosted
+        # OpenAI-compatible servers (Ollama chief among them) apply their own, often much
+        # smaller and version-dependent, default completion length when this is left
+        # unset, which silently truncates a multi-document response into "very minimal"
+        # per-page content. Observed in practice against a real Ollama run.
+        extra_kwargs["max_tokens"] = max_tokens or 8192
 
         def call() -> str:
             # openai's create() is a large union of overloads keyed on `stream`; a

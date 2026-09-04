@@ -36,9 +36,12 @@ from scribe.generation.writer import DocumentCountMismatchError
 from scribe.pipeline import (
     CostConfirmationRequiredError,
     GenerationFailedError,
+    NoExistingPlanError,
     OverwriteConfirmationRequiredError,
 )
 from scribe.project.config_loader import CONFIG_FIELDS, load_project_config
+from scribe.project.notes import NOTES_FILENAME, notes_path
+from scribe.project.org_context import ORG_CONTEXT_FILENAME, org_context_path, write_org_context_template
 from scribe.providers.llm_client import UnsupportedProviderError
 from scribe.providers.registry import NATIVE_PROVIDERS, PROVIDER_PRESETS
 from scribe.providers.resolution import (
@@ -367,6 +370,129 @@ def generate(
         console.print(f"  - {path.name}")
 
 
+@cli.command("revise-plan")
+@click.argument("request", required=False, default="")
+@click.option(
+    "--repo",
+    "repo_path",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Path to the repository root whose documentation structure should be revised.",
+)
+@click.option(
+    "--mode",
+    type=click.Choice([m.value for m in AudienceMode]),
+    default=AudienceMode.LEAN_TECHNICAL.value,
+    show_default=True,
+    help="Must match the mode the existing plan was generated for.",
+)
+@click.option(
+    "--output",
+    "output_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory containing the existing .scribe_plan.json. Defaults to <repo>/docs.",
+)
+@click.option("--provider", default=None, help="LLM provider (see `scribe generate --help`).")
+@click.option(
+    "--model", default=None, help="Model identifier. Defaults to the provider's top recommendation."
+)
+@click.option("--api-key", envvar="SCRIBE_API_KEY", default=None, help="API key for the selected provider.")
+@click.option("--base-url", default=None, help="Override the provider's API base URL.")
+@click.option(
+    "--cache-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help=f"Where the extraction cache lives. Defaults to {DEFAULT_CACHE_ROOT}.",
+)
+@click.option("--verbose", is_flag=True, default=False, help="Print every pipeline status message.")
+@click.option("--quiet", is_flag=True, default=False, help="Suppress status messages.")
+def revise_plan(
+    request: str,
+    repo_path: Path,
+    mode: str,
+    output_dir: Path | None,
+    provider: str | None,
+    model: str | None,
+    api_key: str | None,
+    base_url: str | None,
+    cache_dir: Path | None,
+    verbose: bool,
+    quiet: bool,
+) -> None:
+    """Revise REPO's existing documentation structure per REQUEST (a freeform description of the change).
+
+    Requires `scribe generate` to have already run at least once (needs an existing
+    .scribe_plan.json to revise). Also honors any standing notes in scribe.notes.md, if present.
+    Only updates the STRUCTURE (.scribe_plan.json and scribe-doc-suite-justification.md) -- run
+    `scribe generate` afterward to apply it to actual page content.
+    """
+    resolved_repo_path = repo_path.resolve()
+    if output_dir is None:
+        resolved_output_dir = resolved_repo_path / "docs"
+    elif output_dir.is_absolute():
+        resolved_output_dir = output_dir
+    else:
+        resolved_output_dir = resolved_repo_path / output_dir
+    resolved_output_dir = resolved_output_dir.resolve()
+
+    if not request and not notes_path(resolved_repo_path).exists():
+        console.print(
+            f"[bold yellow]Nothing to revise:[/] pass REQUEST, or write {NOTES_FILENAME} in the repo first."
+        )
+        raise SystemExit(1)
+
+    try:
+        resolution = resolve_provider_and_key(provider, api_key)
+    except NoProviderResolvedError as exc:
+        console.print(f"[bold yellow]{exc}[/]")
+        raise SystemExit(1) from exc
+    if resolution.note:
+        console.print(f"[dim]{resolution.note}[/]")
+    resolved_provider, resolved_api_key = resolution.provider, resolution.api_key
+    resolved_model = model or _default_model_for(resolved_provider)
+
+    config = ScribeConfig(
+        repo_path=resolved_repo_path,
+        output_dir=resolved_output_dir,
+        mode=AudienceMode(mode),
+        provider=resolved_provider,
+        model=resolved_model,
+        api_key=resolved_api_key,
+        base_url=base_url,
+        cache_dir=cache_dir or DEFAULT_CACHE_ROOT,
+    )
+
+    try:
+        with console.status("[bold cyan]Revising documentation structure...", spinner="dots") as status_line:
+            reporter = _make_status_reporter(status_line, verbose=verbose, quiet=quiet)
+            revised = pipeline.revise_doc_plan(config, request, on_status=reporter)
+    except (
+        GraphifyyNotFoundError,
+        GraphifyyContractError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ) as exc:
+        console.print(f"[bold red]Extraction failed:[/] {exc}")
+        raise SystemExit(1) from exc
+    except (UnsupportedProviderError, ValueError) as exc:
+        console.print(f"[bold red]Configuration error:[/] {exc}")
+        raise SystemExit(1) from exc
+    except NoExistingPlanError as exc:
+        console.print(f"[bold yellow]{exc}[/]")
+        raise SystemExit(1) from exc
+    except DocPlanContractError as exc:
+        console.print(f"[bold red]Revision failed:[/] {exc}")
+        raise SystemExit(1) from exc
+
+    console.print(f"[bold green]Revised plan[/] ({len(revised.doc_ids)} doc(s)):")
+    for doc_id in revised.doc_ids:
+        console.print(f"  - {doc_id}")
+    console.print(f"Updated [bold]{config.output_dir / '.scribe_plan.json'}[/] and the justification doc.")
+    console.print("Run [bold]scribe generate[/] to apply this structure to page content.")
+
+
 def _make_status_reporter(status_line, *, verbose: bool, quiet: bool):
     """Return an `on_status` callback matching the requested verbosity.
 
@@ -460,6 +586,32 @@ def _default_model_for(provider: str) -> str:
     raise UnsupportedProviderError(
         f"No default model known for provider {provider!r}; pass --model explicitly."
     )
+
+
+@cli.command("org-context")
+@click.option(
+    "--repo",
+    "repo_path",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Repo to scaffold/inspect the organizational-context file for.",
+)
+def org_context_cmd(repo_path: Path) -> None:
+    """Scaffold or report on `scribe.org.toml` -- the ONLY source of org/infra facts.
+
+    Scribe never invents a company name, contact, account id, or environment name -- it
+    either cites what's in this file or says the information wasn't provided. Never
+    overwrites an existing file.
+    """
+    resolved_repo_path = repo_path.resolve()
+    path = org_context_path(resolved_repo_path)
+    if path.exists():
+        console.print(f"[bold]{ORG_CONTEXT_FILENAME}[/] already exists at [bold]{path}[/]; not overwriting.")
+        return
+    written_path = write_org_context_template(resolved_repo_path)
+    console.print(f"[bold green]Wrote[/] {written_path}")
+    console.print("Fill in whatever fields apply, leave the rest blank -- scribe will never invent them.")
 
 
 @cli.command()
