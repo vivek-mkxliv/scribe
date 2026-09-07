@@ -107,3 +107,91 @@ Everything below was built on top of the initial core-pipeline commits (`694d09f
 - A page reused via per-page staleness skipping no longer accumulates an extra trailing newline
   on every skip cycle (`write_documents` always appends one; the reused-content read-back now
   strips it back off before the next write).
+
+## [Unreleased] (continued — 2026-09-04/07 session)
+
+### Added
+
+**Anti-hallucination prompt guardrails**
+- `templates/master_prompt.md`: hard top-of-file "DO NOT HALLUCINATE" rule; explicit "Unknowns"
+  pattern (state plainly what isn't derivable instead of guessing); required `## References`
+  section per generated page; diagrams now require a prose description + citation of real
+  modules alongside the existing classDef/legend rule; concrete thinness bar (2-3 cited
+  identifiers per section, banned filler phrases named explicitly); nav-tree/table guidance for
+  index-style pages; cross-link rule extended to cover dangling *prose* references, not just
+  dead Markdown links; explicit warning against mislabeling a page's `doc="..."` marker with a
+  sibling page's id (a real failure mode observed live: a model echoed a previous page's id).
+- `templates/planning_prompt.md` / `revision_prompt.md`: explicit devil's-advocate self-audit
+  checklist the model must resolve before emitting JSON (is each section's page count
+  independently justified, or unjustified symmetry/padding?).
+- `constants.py` `AUDIENCE_MODE_GUIDANCE`: reworded "always include X/Y" to "at minimum
+  include... a floor, not a target" so baseline sections aren't treated as a padding quota.
+- `generation/qa.py`: new flag-grounding QA check (`_check_flag_grounding`, category
+  `"ungrounded_flag"`) — flags any `--flag` token in generated content that doesn't exist
+  anywhere in the real detected CLI surface (`extraction/cli_surface.py::known_flags`). Global
+  existence check, not per-subcommand (regex-based subcommand scoping isn't reliable enough).
+- `generation/prompt_builder.py`: the repair-loop follow-up sent back to the model for a
+  single-page call now explicitly restates the exact expected doc id when repairing a
+  mismatched-id failure, instead of a generic "fix the ids you got wrong" message.
+
+**Always-on cost confirmation**
+- New `TokenEstimateConfirmationRequiredError` (`pipeline.py`): before any page-generation LLM
+  call, shows the *real* per-page prompt token estimate for every page about to be generated
+  (not a single representative stand-in) and requires confirmation unless `--yes` — fires for
+  any real run with at least one stale page, not just runs that would exceed `--token-budget`
+  (that older behavior, `CostConfirmationRequiredError`, is unchanged and still checked first
+  for chunking need). CLI prints a per-page token table + total before prompting.
+
+**Per-page incremental disk writes**
+- `generation/writer.py::write_document` writes a single page immediately; `page_writer.py`'s
+  `generate_pages(..., output_dir=...)` calls it right after each page (or placeholder) is
+  generated, so a `Generated 'x.md'.` status line always corresponds to a file already on disk
+  at that moment, and a run interrupted partway through keeps everything generated so far.
+
+**Per-repo presets**
+- `project/presets.py` + `scribe.presets.json`: named, reusable configurations per repo,
+  distinct from `scribe.toml` (JSON, not TOML, specifically because the GUI/TUI need to write
+  this file and `tomllib` is read-only). Never stores a raw API key — only `api_key_env` (the
+  env var name to read it from at run time).
+- `cli.py`: new `--preset NAME` option on `generate` (precedence: explicit CLI flag > preset >
+  `scribe.toml` > built-in default); `scribe presets list/show/save/delete` for CLI-only use.
+
+**Browser GUI (`scribe gui`)**
+- Local, zero-extra-dependency browser UI (`gui/server.py`, stdlib `http.server`/`webbrowser`
+  only), bound to `127.0.0.1`. Form mirrors `generate`'s real flags, a preset dropdown
+  (load/save/delete), a live-polling log pane, and in-page handling for all three
+  confirmation-required errors instead of a terminal `click.confirm`.
+
+**Terminal UI (`scribe tui`)**
+- Textual-based TUI (`gui/tui.py`), opt-in via a new `tui` extra (`pip install scribe[tui]`) —
+  `scribe gui` (the browser UI) still needs zero extra installs. Mirrors the same form/preset/
+  log/confirmation flow, running `pipeline.run()` in a background Textual worker.
+
+**Experimental: pytermgui prototype (not wired into the CLI)**
+- `gui/tui_ptg.py`: a second TUI prototype built on `pytermgui`, for direct comparison against
+  the Textual version before deciding which (if either, alongside the browser GUI) to keep.
+  Run directly (`python -m scribe.gui.tui_ptg --repo ...`), not exposed as `scribe tui-ptg` or
+  similar pending that decision. Notable finding: PyTermGUI's own docs state the project "has
+  reached its final release and is no longer under active development" (archived at v7.8.0).
+
+**Agent customization**
+- `.github/copilot-instructions.md`, `.github/instructions/*.instructions.md`,
+  `.github/prompts/validate.prompt.md`, `.github/agents/doc-quality-auditor.agent.md`,
+  `.github/skills/scribe-live-validation/`: workspace-level Copilot customization files
+  encoding this repo's build/test routine, architecture, testing gotchas, prompt-template
+  guardrails, and a live-validation workflow skill.
+
+### Changed
+- `pipeline.py`'s `OverwriteConfirmationRequiredError` check now runs BEFORE per-page
+  generation starts (was after generation, before the final batch write) — moved up because
+  per-page writes now land on disk incrementally, so it would otherwise be too late to ask.
+- `project/presets.py::save_preset` now refuses to save only when `api_key` is a **truthy**
+  secret (`values.get("api_key")`), not merely present as a key — the browser GUI/TUI form
+  submissions always include an `api_key` field (blank if unset), so the original "key present"
+  check rejected *every* preset save from either UI.
+
+### Fixed
+- `save_preset` blank-`api_key` false-positive rejection described above (affected every preset
+  save from the browser GUI and TUI since the browser GUI first shipped, never caught because
+  the initial HTTP-level tests posted hand-built bodies that happened to omit `api_key`).
+

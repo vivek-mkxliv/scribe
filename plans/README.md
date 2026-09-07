@@ -54,6 +54,7 @@ flowchart LR
 | 05 | [05-packaging-and-distribution.md](05-packaging-and-distribution.md) | [agents/05-packaging.agent.md](agents/05-packaging.agent.md) | P2 | Most ADAS engineers on this team won't have a Python dev env warmed up; a `.exe` matters more than a wheel. |
 | 06 | [06-adoption-and-positioning.md](06-adoption-and-positioning.md) | [agents/06-adoption.agent.md](agents/06-adoption.agent.md) | P2 | A three-person team's tool survives on word-of-mouth; the README is the pitch deck. |
 | 07 | [07-dynamic-doc-structure.md](07-dynamic-doc-structure.md) | *(none yet)* | P1 | Fixed 4/8-doc suites don't scale to real doc trees (sections with multiple pages); the structure should be derived per-repo, not templated. Added 2026-08-25, complete. |
+| 08 | [08-gui-and-presets.md](08-gui-and-presets.md) | *(none yet)* | P2 | CLI-only usage has a real adoption ceiling for non-power-users; a `scribe gui` command (browser UI, stdlib-only) plus a `scribe tui` command (Textual, opt-in extra) plus per-repo named presets (`scribe.presets.json`) lower that bar. Added 2026-09-04, all 3 phases complete. |
 
 An orchestrator agent that can walk the whole roadmap and delegate to the others lives at [agents/00-orchestrator.agent.md](agents/00-orchestrator.agent.md).
 
