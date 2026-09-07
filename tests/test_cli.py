@@ -128,3 +128,80 @@ def test_org_context_command_does_not_overwrite_existing_file(tmp_path):
     assert result.exit_code == 0, result.output
     assert "hand-edited" in (tmp_path / "scribe.org.toml").read_text(encoding="utf-8")
     assert "already exists" in result.output
+
+
+def test_preset_save_list_show_delete_roundtrip(tmp_path):
+    runner = CliRunner()
+
+    save_result = runner.invoke(
+        cli,
+        ["presets", "save", "quick-draft", "--repo", str(tmp_path), "--set", "mode=operator_split"],
+    )
+    assert save_result.exit_code == 0, save_result.output
+    assert (tmp_path / "scribe.presets.json").exists()
+
+    list_result = runner.invoke(cli, ["presets", "list", "--repo", str(tmp_path)])
+    assert list_result.exit_code == 0, list_result.output
+    assert "quick-draft" in list_result.output
+
+    show_result = runner.invoke(cli, ["presets", "show", "quick-draft", "--repo", str(tmp_path)])
+    assert show_result.exit_code == 0, show_result.output
+    assert "operator_split" in show_result.output
+
+    delete_result = runner.invoke(cli, ["presets", "delete", "quick-draft", "--repo", str(tmp_path)])
+    assert delete_result.exit_code == 0, delete_result.output
+    assert not (tmp_path / "scribe.presets.json").exists()
+
+
+def test_preset_save_rejects_unknown_field(tmp_path):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["presets", "save", "quick-draft", "--repo", str(tmp_path), "--set", "not_a_real_field=123"],
+    )
+    assert result.exit_code != 0
+    assert "Unknown preset field" in result.output
+
+
+def test_generate_preset_overrides_scribe_toml_but_not_an_explicit_cli_flag(tmp_path):
+    """Precedence: explicit CLI flag > --preset > scribe.toml > built-in default."""
+    (tmp_path / "scribe.toml").write_text('mode = "lean_technical"\n', encoding="utf-8")
+    runner = CliRunner()
+    save_result = runner.invoke(
+        cli,
+        ["presets", "save", "op-split", "--repo", str(tmp_path), "--set", "mode=operator_split"],
+    )
+    assert save_result.exit_code == 0, save_result.output
+
+    # No --mode flag: preset should win over scribe.toml's "lean_technical".
+    preset_result = runner.invoke(
+        cli, ["generate", "--repo", str(tmp_path), "--preset", "op-split", "--dry-run"]
+    )
+    assert preset_result.exit_code == 0, preset_result.output
+    assert "operator_split" in preset_result.output
+
+    # Explicit --mode flag should still win over the preset.
+    explicit_result = runner.invoke(
+        cli,
+        [
+            "generate",
+            "--repo",
+            str(tmp_path),
+            "--preset",
+            "op-split",
+            "--mode",
+            "lean_technical",
+            "--dry-run",
+        ],
+    )
+    assert explicit_result.exit_code == 0, explicit_result.output
+    assert "lean_technical" in explicit_result.output
+
+
+def test_generate_unknown_preset_name_warns_but_still_proceeds(tmp_path):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["generate", "--repo", str(tmp_path), "--preset", "does-not-exist", "--dry-run"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "No preset named" in result.output

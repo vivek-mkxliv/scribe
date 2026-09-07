@@ -38,10 +38,20 @@ from scribe.pipeline import (
     GenerationFailedError,
     NoExistingPlanError,
     OverwriteConfirmationRequiredError,
+    TokenEstimateConfirmationRequiredError,
 )
 from scribe.project.config_loader import CONFIG_FIELDS, load_project_config
 from scribe.project.notes import NOTES_FILENAME, notes_path
 from scribe.project.org_context import ORG_CONTEXT_FILENAME, org_context_path, write_org_context_template
+from scribe.project.presets import (
+    PRESET_FIELDS,
+    PresetError,
+    delete_preset,
+    load_preset,
+    load_presets,
+    presets_path,
+    save_preset,
+)
 from scribe.providers.llm_client import UnsupportedProviderError
 from scribe.providers.registry import NATIVE_PROVIDERS, PROVIDER_PRESETS
 from scribe.providers.resolution import (
@@ -214,6 +224,15 @@ def cli() -> None:
     help="Re-derive the documentation structure via the LLM even if it's cached for this repo.",
 )
 @click.option(
+    "--preset",
+    "preset_name",
+    default=None,
+    help=(
+        "Name of a preset from this repo's scribe.presets.json to apply. Precedence: explicit "
+        "flags on this command line > --preset values > scribe.toml values > built-in default."
+    ),
+)
+@click.option(
     "--verbose",
     is_flag=True,
     default=False,
@@ -255,6 +274,7 @@ def generate(
     check: bool,
     doc_plan_file: Path | None,
     refresh_plan: bool,
+    preset_name: str | None,
     verbose: bool,
     quiet: bool,
     dry_run: bool,
@@ -263,12 +283,23 @@ def generate(
     resolved_repo_path = repo_path.resolve()
 
     # Project-level defaults (scribe.toml / [tool.scribe]) fill in anything left at its CLI
-    # default; an explicitly-passed flag always wins. See project/config_loader.py.
+    # default; an explicitly-passed flag always wins. See project/config_loader.py. A named
+    # --preset (scribe.presets.json) is more specific than scribe.toml's blanket defaults, so
+    # it wins when both apply to the same field -- see project/presets.py.
     project_defaults = load_project_config(resolved_repo_path)
+    preset_values = {}
+    if preset_name is not None:
+        preset_values = load_preset(resolved_repo_path, preset_name) or {}
+        if not preset_values:
+            console.print(
+                f"[bold yellow]No preset named '{preset_name}' found in "
+                f"{presets_path(resolved_repo_path).name}.[/]"
+            )
+    merged_defaults = {**project_defaults, **preset_values}
     local_values = {name: value for name, value in locals().items() if name in CONFIG_FIELDS}
     for name in CONFIG_FIELDS:
-        if name in project_defaults and ctx.get_parameter_source(name) == click.ParameterSource.DEFAULT:
-            local_values[name] = project_defaults[name]
+        if name in merged_defaults and ctx.get_parameter_source(name) == click.ParameterSource.DEFAULT:
+            local_values[name] = merged_defaults[name]
     mode, provider, model, output_dir, max_repair_attempts, token_budget, chunked = (
         local_values["mode"],
         local_values["provider"],
@@ -278,6 +309,24 @@ def generate(
         local_values["token_budget"],
         local_values["chunked"],
     )
+    # Preset-only knobs not covered by CONFIG_FIELDS/scribe.toml today.
+    if (
+        "max_tokens" in preset_values
+        and ctx.get_parameter_source("max_tokens") == click.ParameterSource.DEFAULT
+    ):
+        max_tokens = preset_values["max_tokens"]
+    if (
+        "temperature" in preset_values
+        and ctx.get_parameter_source("temperature") == click.ParameterSource.DEFAULT
+    ):
+        temperature = preset_values["temperature"]
+    preset_api_key_env = preset_values.get("api_key_env")
+    if (
+        preset_api_key_env
+        and api_key is None
+        and ctx.get_parameter_source("api_key") == click.ParameterSource.DEFAULT
+    ):
+        api_key = os.environ.get(preset_api_key_env)
     if isinstance(output_dir, str):
         output_dir = Path(output_dir)
 
@@ -555,6 +604,20 @@ def _run_with_confirmations(
 
     try:
         return _attempt(config)
+    except TokenEstimateConfirmationRequiredError as exc:
+        console.print(
+            f"[bold cyan]About to generate {len(exc.page_token_estimates)} page(s) "
+            f"(~{exc.total_estimated_tokens:,} total estimated prompt tokens):[/]"
+        )
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Page")
+        table.add_column("Est. prompt tokens", justify="right")
+        for doc_id, tokens in sorted(exc.page_token_estimates.items(), key=lambda kv: -kv[1]):
+            table.add_row(doc_id, f"{tokens:,}")
+        console.print(table)
+        if not click.confirm("Proceed with generation?", default=True):
+            raise SystemExit(1) from exc
+        return _attempt(dataclasses.replace(config, assume_yes=True))
     except (CostConfirmationRequiredError, OverwriteConfirmationRequiredError) as exc:
         console.print(f"[bold yellow]{exc}[/]")
         prompt = "Overwrite?" if isinstance(exc, OverwriteConfirmationRequiredError) else "Proceed anyway?"
@@ -586,6 +649,157 @@ def _default_model_for(provider: str) -> str:
     raise UnsupportedProviderError(
         f"No default model known for provider {provider!r}; pass --model explicitly."
     )
+
+
+@cli.group("presets")
+def presets_group() -> None:
+    """Manage named per-repo presets (scribe.presets.json) usable via `generate --preset NAME`."""
+
+
+def _presets_repo_option():
+    return click.option(
+        "--repo",
+        "repo_path",
+        type=click.Path(exists=True, file_okay=False, path_type=Path),
+        default=Path("."),
+        show_default=True,
+        help="Repo whose scribe.presets.json to use.",
+    )
+
+
+@presets_group.command("list")
+@_presets_repo_option()
+def presets_list(repo_path: Path) -> None:
+    """List every named preset defined for REPO."""
+    resolved_repo_path = repo_path.resolve()
+    presets = load_presets(resolved_repo_path)
+    if not presets:
+        console.print(f"No presets found in {presets_path(resolved_repo_path)}.")
+        return
+    table = Table(title=f"Presets in {presets_path(resolved_repo_path).name}")
+    table.add_column("Name")
+    table.add_column("Fields")
+    for name, fields in presets.items():
+        table.add_row(name, ", ".join(f"{k}={v}" for k, v in fields.items()))
+    console.print(table)
+
+
+@presets_group.command("show")
+@click.argument("name")
+@_presets_repo_option()
+def presets_show(name: str, repo_path: Path) -> None:
+    """Print one named preset's fields."""
+    resolved_repo_path = repo_path.resolve()
+    preset = load_preset(resolved_repo_path, name)
+    if preset is None:
+        console.print(
+            f"[bold yellow]No preset named '{name}' found in {presets_path(resolved_repo_path).name}.[/]"
+        )
+        raise SystemExit(1)
+    for key, value in preset.items():
+        console.print(f"{key}: {value}")
+
+
+@presets_group.command("save")
+@click.argument("name")
+@click.option(
+    "--set",
+    "set_values",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help=f"Preset field to set, repeatable. Valid keys: {', '.join(PRESET_FIELDS)}.",
+)
+@_presets_repo_option()
+def presets_save(name: str, set_values: tuple[str, ...], repo_path: Path) -> None:
+    """Save/overwrite a named preset, e.g. `--set mode=lean_technical --set provider=ollama`."""
+    resolved_repo_path = repo_path.resolve()
+    values: dict[str, str] = {}
+    for item in set_values:
+        if "=" not in item:
+            raise click.BadParameter(f"--set must be KEY=VALUE, got {item!r}")
+        key, _, value = item.partition("=")
+        if key not in PRESET_FIELDS:
+            raise click.BadParameter(f"Unknown preset field {key!r}. Valid: {', '.join(PRESET_FIELDS)}")
+        values[key] = value
+    try:
+        written = save_preset(resolved_repo_path, name, values)
+    except PresetError as exc:
+        console.print(f"[bold red]{exc}[/]")
+        raise SystemExit(1) from exc
+    console.print(f"[bold green]Saved[/] preset '{name}' to {written}.")
+
+
+@presets_group.command("delete")
+@click.argument("name")
+@_presets_repo_option()
+def presets_delete(name: str, repo_path: Path) -> None:
+    """Delete one named preset."""
+    resolved_repo_path = repo_path.resolve()
+    if delete_preset(resolved_repo_path, name):
+        console.print(f"[bold green]Deleted[/] preset '{name}'.")
+    else:
+        console.print(f"No preset named '{name}' found -- nothing to delete.")
+
+
+@cli.command()
+@click.option(
+    "--repo",
+    "repo_path",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Repo to generate documentation for via the GUI.",
+)
+@click.option(
+    "--port",
+    type=int,
+    default=0,
+    show_default=False,
+    help="Port to bind the local GUI server to. Defaults to an OS-assigned free port.",
+)
+@click.option(
+    "--no-browser",
+    is_flag=True,
+    default=False,
+    help="Don't automatically open the default browser -- just print the URL.",
+)
+def gui(repo_path: Path, port: int, no_browser: bool) -> None:
+    """Launch a local browser-based GUI for REPO -- zero extra dependencies (stdlib only).
+
+    Bound to 127.0.0.1 only; never reachable over the network. Ctrl+C stops the server.
+    """
+    from scribe.gui.server import run_gui
+
+    run_gui(repo_path.resolve(), port=port, open_browser=not no_browser)
+
+
+@cli.command()
+@click.option(
+    "--repo",
+    "repo_path",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Repo to generate documentation for via the TUI.",
+)
+def tui(repo_path: Path) -> None:
+    """Launch a terminal UI for REPO -- same form/preset/log flow as `scribe gui`.
+
+    Requires the optional `tui` extra (`pip install scribe[tui]`); the browser GUI
+    (`scribe gui`) needs no extra install at all.
+    """
+    try:
+        from scribe.gui.tui import run_tui
+    except ImportError as exc:
+        console.print(
+            "[bold yellow]The TUI needs the optional 'tui' extra, which isn't installed.[/]\n"
+            "Install it with:\n"
+            "  pip install scribe[tui]\n"
+            "Or use the zero-dependency browser GUI instead: scribe gui"
+        )
+        raise SystemExit(1) from exc
+
+    run_tui(repo_path.resolve())
 
 
 @cli.command("org-context")
