@@ -11,6 +11,7 @@ from __future__ import annotations
 from scribe.extraction.cli_surface import (
     build_cli_surface_text,
     detect_cli_surface,
+    known_flags,
     render_cli_surface_text,
 )
 
@@ -99,3 +100,21 @@ def test_render_cli_surface_text_includes_detected_facts(tmp_path):
     assert "cli.py" in text
     assert "run" in text
     assert "these are the" in text.lower()
+
+
+def test_known_flags_flattens_across_all_surfaces(tmp_path):
+    _write(
+        tmp_path / "cli.py",
+        "import argparse\np = argparse.ArgumentParser()\n"
+        'p.add_argument("--repo")\np.add_argument("--mode")\n',
+    )
+    _write(
+        tmp_path / "sub" / "commands.py",
+        'import argparse\np = argparse.ArgumentParser()\np.add_argument("--fields")\n',
+    )
+    surfaces = detect_cli_surface(tmp_path)
+    assert known_flags(surfaces) == {"--repo", "--mode", "--fields"}
+
+
+def test_known_flags_empty_for_no_surfaces():
+    assert known_flags([]) == set()

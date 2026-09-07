@@ -83,3 +83,29 @@ def test_mermaid_block_of_only_style_directives_is_not_flagged():
     }
     report = review_documents(documents)
     assert report.ok
+
+
+def test_ungrounded_flag_is_flagged_when_cli_surface_detected():
+    """Regression test: a real local model invented a `--files` flag never seen anywhere in the
+    repo's real CLI surface (observed live against jira-issue-creator)."""
+    documents = {"README.md": "Attach a file with `jira_creator create --files=attachment.zip`."}
+    report = review_documents(documents, known_cli_flags={"--boards", "--config", "--dry-run"})
+    assert not report.ok
+    assert any(issue.category == "ungrounded_flag" for issue in report.issues)
+
+
+def test_grounded_flags_are_not_flagged():
+    documents = {"README.md": "Run `jira_creator create --boards board1 --config cfg.yml`."}
+    report = review_documents(documents, known_cli_flags={"--boards", "--config", "--dry-run"})
+    assert report.ok
+
+
+def test_flag_grounding_is_skipped_when_no_cli_surface_detected():
+    """No detected CLI surface at all is "no signal", not "every flag is wrong" -- skip the
+    check entirely rather than flagging every flag mentioned (e.g. a page discussing an
+    unrelated third-party tool's flags)."""
+    documents = {"README.md": "Some unrelated tool takes `--whatever` as a flag."}
+    report = review_documents(documents)
+    assert report.ok
+    report_empty_set = review_documents(documents, known_cli_flags=set())
+    assert report_empty_set.ok

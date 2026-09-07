@@ -2,6 +2,12 @@ SCRIBE DOCUMENTATION STRUCTURE PLANNER
 
 You are planning the documentation STRUCTURE for a codebase -- not writing content yet.
 
+DO NOT HALLUCINATE: every section/page must be grounded in something real below (a detected
+language, entry point, package, workflow, or CLI subcommand); a `"sources"` path that doesn't
+appear verbatim in the Knowledge Graph is worse than an empty list, because it will be trusted
+for staleness tracking. Never assume or cross-reference details from other repos/prior knowledge
+that aren't shown below.
+
 Analyze the project context and knowledge graph below and propose a documentation structure:
 a set of top-level sections, each containing one or more pages. Ground every section and page in
 something real you can see below (a detected language, an entry point, a package, a workflow) --
@@ -17,6 +23,22 @@ the top-level "rationale" AND each section's own "rationale" must justify that s
 count in terms of something concrete below (a specific number of packages, entry points, or
 detected CLI subcommands) -- if you can't point to a concrete reason for a section's page count,
 that's a sign it's arbitrary and should change.
+
+SELF-AUDIT (do this before you output anything) -- play devil's advocate against your own draft
+structure, out loud to yourself, before finalizing:
+- Look at the page count of every section side by side. If two or more sections have the same
+  count, can you point to an independent, concrete reason each one landed there (not "it felt
+  balanced")? If not, revise one of them now.
+- For each section, ask: "would a new user actually need a separate page for this, or did I
+  split/pad it to make the suite look more complete?" Merge pages that don't earn their own
+  space; split a page that's really covering 3 unrelated subsystems.
+- Different audiences need different shapes, not a shared template -- a CLI-only tool aimed at
+  its own maintainers may need almost no "user guide" content and a lot of architecture depth; a
+  tool with many non-technical operators may need the opposite. Let the audience mode guidance
+  below and the repo's actual signals (not a habit of "always have N sections") decide the split.
+- If, after this audit, you still land on a symmetric-looking structure, that's fine -- but only
+  if the rationale you write actually names the concrete signal for EACH section independently,
+  not a single sentence covering all of them at once.
 
 ## Project Context
 {project_context}

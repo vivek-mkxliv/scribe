@@ -7,6 +7,12 @@ Ground any new/changed section or page in something real from the Knowledge Grap
 like the original planning rules: never default to a round number just because it looks tidy, and
 never invent a source path.
 
+DO NOT HALLUCINATE: never assume or cross-reference details from other repos/prior knowledge that
+aren't shown below to fill a gap in the revision. Before finalizing, play devil's advocate against
+the revised structure: did the requested change actually justify every page count it touched, or
+did it introduce symmetry/padding that isn't backed by a concrete signal (package count, entry
+point, CLI subcommand)? If a section's count still isn't independently justified, fix it now.
+
 ## Current Structure (previously generated, with its rationale)
 {current_justification}
 

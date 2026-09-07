@@ -15,6 +15,17 @@ REPAIR_FOLLOWUP_TEMPLATE = (
     "Pay special attention to the document ids you got wrong."
 )
 
+# Appended when a single-page call's marker id doesn't match its assignment -- observed in
+# practice: the model mislabels its output with a SIBLING page's id from the "Full
+# Documentation Plan" cross-linking list (often the previous page generated) instead of the
+# one actually assigned to it.
+REPAIR_FOLLOWUP_WRONG_ID_HINT = (
+    ' The EXACT doc id for THIS page is "{expected_doc_id}" -- use exactly that string in the '
+    "marker, character-for-character. Do not reuse a different id from the Full Documentation "
+    "Plan list (e.g. a sibling page, or the one you wrote in a previous call) even if it looks "
+    "similar or appeared first in that list."
+)
+
 
 def _load_template(name: str) -> str:
     template_path = resources.files("scribe.templates").joinpath(name)
@@ -92,6 +103,13 @@ def build_revision_prompt(
     )
 
 
-def build_repair_followup(issue_description: str) -> str:
-    """Build a short follow-up message asking the LLM to fix a validation failure."""
-    return REPAIR_FOLLOWUP_TEMPLATE.format(issue_description=issue_description)
+def build_repair_followup(issue_description: str, *, expected_doc_id: str | None = None) -> str:
+    """Build a short follow-up message asking the LLM to fix a validation failure.
+
+    `expected_doc_id`, if given (single-page generation calls only), appends an explicit
+    restatement of the one correct id -- see `REPAIR_FOLLOWUP_WRONG_ID_HINT`.
+    """
+    message = REPAIR_FOLLOWUP_TEMPLATE.format(issue_description=issue_description)
+    if expected_doc_id is not None:
+        message += REPAIR_FOLLOWUP_WRONG_ID_HINT.format(expected_doc_id=expected_doc_id)
+    return message

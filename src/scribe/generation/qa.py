@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 _MERMAID_BLOCK_PATTERN = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
 _INTERNAL_LINK_PATTERN = re.compile(r"\[[^\]]+\]\((?!https?://|mailto:)([^)#]+)")
+_FLAG_TOKEN_PATTERN = re.compile(r"(?<![\w-])--[a-zA-Z][\w-]*")
 _PLACEHOLDER_PATTERNS = (
     re.compile(r"\bTODO\b", re.IGNORECASE),
     re.compile(r"\bLorem ipsum\b", re.IGNORECASE),
@@ -39,7 +40,7 @@ _STYLE_ONLY_PREFIXES = ("classDef", "style", "linkStyle", "click")
 @dataclass
 class QAIssue:
     doc_id: str
-    category: str  # "mermaid" | "dead_link" | "placeholder"
+    category: str  # "mermaid" | "dead_link" | "placeholder" | "ungrounded_flag"
     message: str
     target: str | None = None  # the raw link target, for dead_link issues only
 
@@ -100,7 +101,38 @@ def _check_placeholders(doc_id: str, body: str) -> list[QAIssue]:
     return issues
 
 
-def review_documents(documents: dict[str, str], known_doc_ids: set[str] | None = None) -> QAReport:
+def _check_flag_grounding(doc_id: str, body: str, known_flags: set[str]) -> list[QAIssue]:
+    """Flag any `--long-flag` token not present in the real detected CLI surface.
+
+    A global existence check, not a per-subcommand mapping -- catches wholesale invention (a
+    flag that doesn't exist anywhere in the real CLI, e.g. `--files`/`--issue`) but can't verify
+    that a real flag is being attributed to the right subcommand. Skipped entirely when
+    `known_flags` is empty -- no detected CLI surface is "no signal", not "everything is wrong".
+    """
+    if not known_flags:
+        return []
+    issues = []
+    seen: set[str] = set()
+    for match in _FLAG_TOKEN_PATTERN.finditer(body):
+        flag = match.group(0)
+        if flag in known_flags or flag in seen:
+            continue
+        seen.add(flag)
+        issues.append(
+            QAIssue(
+                doc_id,
+                "ungrounded_flag",
+                f"References flag {flag!r}, which was not found in the detected CLI surface.",
+            )
+        )
+    return issues
+
+
+def review_documents(
+    documents: dict[str, str],
+    known_doc_ids: set[str] | None = None,
+    known_cli_flags: set[str] | None = None,
+) -> QAReport:
     """Run all QA checks over `{doc_id: body}` and return a combined report.
 
     `known_doc_ids` is the full set of doc ids valid for cross-linking (the whole doc plan) --
@@ -110,12 +142,18 @@ def review_documents(documents: dict[str, str], known_doc_ids: set[str] | None =
     explicitly. Matching is by basename on both sides, so a correctly nested-folder cross-link
     (e.g. `../user-guide/01-execution.md` linking to known id `user-guide/01-execution.md`)
     resolves without needing full relative-path resolution.
+
+    `known_cli_flags` is the flattened set of real `--flag` tokens detected across the repo's
+    CLI surface (see `extraction/cli_surface.py::known_flags`); omit or pass an empty set when
+    no CLI surface was detected, which skips the flag-grounding check entirely.
     """
     known_doc_ids = known_doc_ids if known_doc_ids is not None else set(documents)
     known_basenames = {known_id.split("/")[-1] for known_id in known_doc_ids}
+    resolved_known_flags = known_cli_flags or set()
     issues: list[QAIssue] = []
     for doc_id, body in documents.items():
         issues.extend(_check_mermaid_blocks(doc_id, body))
         issues.extend(_check_dead_internal_links(doc_id, body, known_basenames))
         issues.extend(_check_placeholders(doc_id, body))
+        issues.extend(_check_flag_grounding(doc_id, body, resolved_known_flags))
     return QAReport(issues=issues)

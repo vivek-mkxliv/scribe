@@ -114,3 +114,14 @@ def render_cli_surface_text(surfaces: list[CliSurface]) -> str:
 def build_cli_surface_text(repo_path: Path) -> str:
     """Convenience wrapper: detect then render in one call."""
     return render_cli_surface_text(detect_cli_surface(repo_path))
+
+
+def known_flags(surfaces: list[CliSurface]) -> set[str]:
+    """Flatten every real `--flag` detected across all surfaces, for QA grounding checks.
+
+    Global existence set, not a per-subcommand mapping -- a flag's presence here only means it
+    exists SOMEWHERE in the real CLI, not that it's valid for whichever subcommand a generated
+    page attaches it to (reliably scoping regex-detected flags to a specific subcommand isn't
+    feasible here); see `generation/qa.py::_check_flag_grounding`.
+    """
+    return {flag for surface in surfaces for flag in surface.flags}

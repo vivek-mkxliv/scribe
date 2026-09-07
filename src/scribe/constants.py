@@ -40,17 +40,22 @@ DOC_SUITE: dict[AudienceMode, list[str]] = {
 AUDIENCE_MODE_GUIDANCE: dict[AudienceMode, str] = {
     AudienceMode.LEAN_TECHNICAL: (
         "A small internal engineering team (a scrum master + 2 engineers). One direct, technical "
-        "tone throughout. Always include an executive-summary/quick-start section and a "
+        "tone throughout. At minimum include an executive-summary/quick-start section and a "
         "developer/architecture section; add more sections or pages only if the repo's real "
-        "structure (multiple subsystems, multiple entry points, a large surface area) warrants it."
+        "structure (multiple subsystems, multiple entry points, a large surface area) warrants "
+        "it. These two are a floor, not a target -- don't pad either one, and don't add further "
+        "sections just to look more complete than the repo's actual shape justifies."
     ),
     AudienceMode.OPERATOR_SPLIT: (
         "Two distinct audiences sharing one documentation space: operators (strictly "
         "transactional, jargon-free, step-by-step, no architecture) and engineers (technical, "
-        "architecture-level). Always include a documentation-home/routing section pointing each "
-        "audience at their part, an operator-facing execution/troubleshooting side, and an "
+        "architecture-level). At minimum include a documentation-home/routing section pointing "
+        "each audience at their part, an operator-facing execution/troubleshooting side, and an "
         "engineer-facing architecture/technical side. Add more sections or pages only where the "
-        "repo's real shape (distinct workflows, distinct subsystems) justifies a separate page."
+        "repo's real shape (distinct workflows, distinct subsystems) justifies a separate page --"
+        " and the operator/engineer split does NOT need to be page-count-symmetric; a CLI tool "
+        "with little true 'operator' surface may need far fewer operator pages than engineering "
+        "ones, or vice versa for a mostly-operational tool with little novel architecture."
     ),
 }
 
