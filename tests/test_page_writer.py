@@ -138,6 +138,87 @@ def test_generate_with_repair_still_raises_when_repair_attempts_exhausted():
         )
 
 
+def test_generate_pages_writes_each_page_to_disk_immediately_when_output_dir_given(tmp_path):
+    """Regression test: pages must land on disk as each one finishes, not only once the whole
+    suite's loop completes -- otherwise a "Generated 'x.md'." status line doesn't correspond to
+    a file a user can actually see yet."""
+    pages = [DocPage(id=DOC_ID, title="Getting Started", description="intro")]
+    client = ScriptedLLMClient([_doc(DOC_ID, "Real content.")])
+
+    documents, failed = generate_pages(
+        client,
+        "model",
+        pages,
+        build_prompt_for_page=lambda _page: "prompt",
+        max_repair_attempts=1,
+        on_status=lambda _m: None,
+        output_dir=tmp_path,
+    )
+
+    assert failed == []
+    written = tmp_path / DOC_ID
+    assert written.exists()
+    assert written.read_text(encoding="utf-8").strip() == "Real content."
+
+
+def test_generate_pages_writes_placeholder_to_disk_too_when_output_dir_given(tmp_path):
+    pages = [DocPage(id=DOC_ID, title="Getting Started", description="intro")]
+    always_broken = "no markers at all, never valid"
+    client = ScriptedLLMClient([always_broken] * 10)
+
+    documents, failed = generate_pages(
+        client,
+        "model",
+        pages,
+        build_prompt_for_page=lambda _page: "prompt",
+        max_repair_attempts=1,
+        on_status=lambda _m: None,
+        output_dir=tmp_path,
+    )
+
+    assert failed == [DOC_ID]
+    written = tmp_path / DOC_ID
+    assert written.exists()
+    assert "Generation failed for this page" in written.read_text(encoding="utf-8")
+
+
+def test_generate_pages_does_not_touch_disk_when_no_output_dir_given(tmp_path):
+    """Default (`output_dir=None`) must stay purely in-memory -- existing callers that write
+    the whole batch themselves (e.g. pipeline.py's reused-page path) must not get double writes."""
+    pages = [DocPage(id=DOC_ID, title="Getting Started", description="intro")]
+    client = ScriptedLLMClient([_doc(DOC_ID, "Real content.")])
+
+    generate_pages(
+        client,
+        "model",
+        pages,
+        build_prompt_for_page=lambda _page: "prompt",
+        max_repair_attempts=1,
+        on_status=lambda _m: None,
+    )
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_generate_with_repair_restates_expected_id_after_a_wrong_marker_id():
+    """Regression test: a real local model mislabeled its output for page 2 with page 1's doc
+    id (copied from the "Full Documentation Plan" cross-link list) instead of its own
+    assignment. The repair follow-up sent back to the model must explicitly restate the one
+    correct id for a single-page call."""
+    other_id = "cli-usage/01-create.md"
+    wrong_id_response = _doc(other_id, "Body mistakenly labeled as the wrong page.")
+    correct_response = _doc(DOC_ID, "Correctly labeled body.")
+    client = ScriptedLLMClient([wrong_id_response, correct_response])
+
+    documents = generate_with_repair(
+        client, "prompt", "model", [DOC_ID], max_repair_attempts=1, on_status=lambda _m: None
+    )
+
+    assert documents[DOC_ID] == "Correctly labeled body."
+    # The follow-up prompt sent for the retry must restate the exact expected id.
+    assert f'"{DOC_ID}"' in client.prompts[1]
+
+
 def test_dead_link_only_issues_are_auto_healed_instead_of_discarding_the_page():
     """Regression test: a real model linked to a file it saw in the Project Context tree
     (not part of the doc suite) -- losing the whole page over one stray link is a bad trade."""

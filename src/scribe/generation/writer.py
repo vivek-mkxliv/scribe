@@ -72,17 +72,24 @@ def validate_sections(markdown: str, expected_ids: list[str]) -> ValidationResul
     return ValidationResult(found=found, missing=missing, duplicated=duplicated, extra=extra)
 
 
+def write_document(doc_id: str, body: str, output_dir: Path) -> Path:
+    """Write a single already-validated document to disk, creating parent dirs as needed.
+
+    Used both by `write_documents` (batch) and by per-page generation (`page_writer.py`), which
+    calls this immediately after each page is generated so partial progress lands on disk right
+    away instead of only appearing once the entire suite finishes.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    file_path = output_dir / doc_id
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(body + "\n", encoding="utf-8")
+    return file_path
+
+
 def write_documents(documents: dict[str, str], output_dir: Path, doc_ids: list[str]) -> list[Path]:
     """Write each already-validated `{doc_id: body}` entry in `doc_ids` order to `output_dir`.
 
     `doc_id` may include a folder prefix (e.g. `"user-guides/01-gui.md"` from a dynamic doc
     plan's nested sections); the parent directory is created as needed.
     """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    written_paths: list[Path] = []
-    for doc_id in doc_ids:
-        file_path = output_dir / doc_id
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(documents[doc_id] + "\n", encoding="utf-8")
-        written_paths.append(file_path)
-    return written_paths
+    return [write_document(doc_id, documents[doc_id], output_dir) for doc_id in doc_ids]

@@ -10,10 +10,15 @@ from scribe.config import ScribeConfig
 from scribe.constants import AudienceMode
 from scribe.extraction import extractor
 from scribe.extraction.cache import compute_paths_hash, compute_repo_hash, repo_identity_key
-from scribe.extraction.cli_surface import build_cli_surface_text
+from scribe.extraction.cli_surface import (
+    build_cli_surface_text,
+    detect_cli_surface,
+    known_flags,
+    render_cli_surface_text,
+)
 from scribe.extraction.extractor import GraphifyyMissingAction
 from scribe.extraction.models import GraphContext
-from scribe.generation import chunking, writer
+from scribe.generation import chunking
 from scribe.generation.doc_plan import (
     DocPage,
     DocPlan,
@@ -47,6 +52,7 @@ __all__ = [
     "GenerationFailedError",
     "NoExistingPlanError",
     "OverwriteConfirmationRequiredError",
+    "TokenEstimateConfirmationRequiredError",
     "check_drift",
     "revise_doc_plan",
     "run",
@@ -91,6 +97,28 @@ class CostConfirmationRequiredError(RuntimeError):
         super().__init__(
             f"Estimated ~{estimated_tokens} tokens (budget {token_budget}) via {reason}. "
             "Re-run with --yes to proceed."
+        )
+
+
+class TokenEstimateConfirmationRequiredError(RuntimeError):
+    """Raised before any per-page LLM call when `assume_yes` wasn't set, so the CLI can show
+    the actual, full per-page token estimate for THIS run and let the user confirm before any
+    cost is spent.
+
+    Unlike `CostConfirmationRequiredError` (which only fires when a run would exceed
+    `--token-budget` and need chunking, based on one representative page), this always fires
+    whenever there's at least one page left to generate -- it reflects the real prompt for
+    every page that will actually be sent, not a single stand-in estimate for the shared digest.
+    Callers (the CLI) should present `page_token_estimates`/`total_estimated_tokens` to the user
+    and, on confirmation, retry with `dataclasses.replace(config, assume_yes=True)`.
+    """
+
+    def __init__(self, page_token_estimates: dict[str, int]) -> None:
+        self.page_token_estimates = page_token_estimates
+        self.total_estimated_tokens = sum(page_token_estimates.values())
+        super().__init__(
+            f"About to generate {len(page_token_estimates)} page(s), "
+            f"~{self.total_estimated_tokens} total prompt tokens. Re-run with --yes to proceed."
         )
 
 
@@ -342,7 +370,8 @@ def run(
     )
     project_context = extractor.build_project_context(config.repo_path)
     repo_hash = compute_repo_hash(config.repo_path)
-    cli_surface_text = build_cli_surface_text(config.repo_path)
+    detected_cli_surface = detect_cli_surface(config.repo_path)
+    cli_surface_text = render_cli_surface_text(detected_cli_surface)
     org_context_text = load_org_context(config.repo_path)
 
     # 2. Prompt Assembly (preliminary): a heuristic (non-LLM) plan and its longest page are used
@@ -427,16 +456,44 @@ def run(
             org_context_text=org_context_text,
         )
 
+    # Confirm BEFORE any page is generated/written -- once per-page writes start landing on disk
+    # (see below), it's too late to ask "overwrite?" for files already overwritten. Only fires
+    # when output_dir has same-named files scribe doesn't already own (no manifest at all, e.g.
+    # hand-written docs or a first run pointed at an existing folder); once a manifest exists,
+    # these files are scribe's own prior output, so regenerating never re-prompts. Checked BEFORE
+    # the token-estimate confirmation below since it's a safety concern (don't clobber files
+    # scribe doesn't own), independent of and more fundamental than cost.
+    if not config.assume_yes and manifest.load_manifest(config.output_dir) is None:
+        already_there = manifest.existing_doc_files(config.output_dir, expected_doc_ids)
+        if already_there:
+            raise OverwriteConfirmationRequiredError(already_there)
+
+    # Full per-page token estimate for THIS run's actual pages (not a single representative
+    # stand-in) -- built once here and reused for the real generation calls below, so nothing
+    # is prompted-for twice. Always confirmed before any LLM call runs (every real regeneration,
+    # even once scribe owns the output), unlike the digest-only budget check above (which only
+    # fires when a run would need chunking).
+    page_prompts = {page.id: _prompt_for_page(page) for page in stale_pages}
+    page_token_estimates = {doc_id: estimate_token_count(prompt) for doc_id, prompt in page_prompts.items()}
+    if stale_pages and not config.assume_yes:
+        raise TokenEstimateConfirmationRequiredError(page_token_estimates)
+
+    # Each page is written to disk (`writer.write_document`) as soon as it's generated -- see
+    # `generate_pages`' `output_dir` param -- so a "Generated 'x.md'." status line always
+    # corresponds to a file that's actually on disk at that moment, not just held in memory
+    # until the whole suite finishes.
     documents, failed_page_ids = generate_pages(
         client,
         config.model,
         stale_pages,
-        _prompt_for_page,
+        lambda page: page_prompts[page.id],
         config.max_repair_attempts,
         status,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
         all_doc_ids=expected_doc_ids,
+        known_cli_flags=known_flags(detected_cli_surface),
+        output_dir=config.output_dir,
     )
     documents.update(reused_documents)
     for failed_id in failed_page_ids:
@@ -449,15 +506,11 @@ def run(
         )
 
     # 5. File System Writing
-    # Only ask when output_dir has same-named files scribe doesn't already own (no manifest at
-    # all, e.g. hand-written docs or a first run pointed at an existing folder). Once a manifest
-    # exists, these files are scribe's own prior output, so regenerating never re-prompts.
-    if not config.assume_yes and manifest.load_manifest(config.output_dir) is None:
-        already_there = manifest.existing_doc_files(config.output_dir, expected_doc_ids)
-        if already_there:
-            raise OverwriteConfirmationRequiredError(already_there)
-
-    written = writer.write_documents(documents, config.output_dir, expected_doc_ids)
+    # `stale_pages` were already written incrementally above; `reused_documents` are unchanged
+    # copies already on disk from a previous run -- neither needs writing again here. This just
+    # computes the full set of output paths (for the CLI's final summary) and records the
+    # manifest, which must reflect the complete, final set of doc ids/hashes in one place.
+    written = [config.output_dir / doc_id for doc_id in expected_doc_ids]
     manifest.write_manifest(
         config.output_dir, repo_hash, config.mode.value, expected_doc_ids, page_hashes=page_hashes
     )

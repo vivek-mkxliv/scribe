@@ -9,7 +9,12 @@ import pytest
 from scribe.config import ScribeConfig
 from scribe.constants import DOC_SUITE, AudienceMode
 from scribe.generation.doc_plan import PLANNER_MARKER, heuristic_doc_plan
-from scribe.pipeline import CostConfirmationRequiredError, _build_bounded_digest_text, run
+from scribe.pipeline import (
+    CostConfirmationRequiredError,
+    TokenEstimateConfirmationRequiredError,
+    _build_bounded_digest_text,
+    run,
+)
 from scribe.providers import llm_client
 
 PLAN_RESPONSE = json.dumps(
@@ -98,6 +103,34 @@ def test_run_proceeds_with_chunked_generation_when_assume_yes(tmp_path, monkeypa
     # At least one package-summary call plus the final synthesis call.
     assert any("Summarize this subsystem" in call for call in fake_client.calls)
     assert any("Summarize this subsystem" not in call for call in fake_client.calls)
+
+
+def test_run_raises_token_estimate_confirmation_before_any_page_generation(tmp_path, monkeypatch):
+    """Unlike CostConfirmationRequiredError (only over-budget/chunked runs), this must fire for
+    ANY real run with at least one page to generate, whenever assume_yes isn't set."""
+    _write(tmp_path / "repo" / "a.py", "import os\n")
+    fake_client = FakeLLMClient()
+    monkeypatch.setattr(llm_client, "build_client", lambda *a, **k: fake_client)
+
+    with pytest.raises(TokenEstimateConfirmationRequiredError) as exc_info:
+        run(_base_config(tmp_path, assume_yes=False))
+
+    assert set(exc_info.value.page_token_estimates) == set(DOC_SUITE[AudienceMode.LEAN_TECHNICAL])
+    assert exc_info.value.total_estimated_tokens == sum(exc_info.value.page_token_estimates.values())
+    assert exc_info.value.total_estimated_tokens > 0
+    # Only the plan-derivation call happened -- raised before any page-generation call.
+    assert len(fake_client.calls) == 1
+    assert PLANNER_MARKER in fake_client.calls[0]
+
+
+def test_run_proceeds_past_token_estimate_confirmation_when_assume_yes(tmp_path, monkeypatch):
+    _write(tmp_path / "repo" / "a.py", "import os\n")
+    fake_client = FakeLLMClient()
+    monkeypatch.setattr(llm_client, "build_client", lambda *a, **k: fake_client)
+
+    written = run(_base_config(tmp_path, assume_yes=True))
+
+    assert {p.name for p in written} == set(DOC_SUITE[AudienceMode.LEAN_TECHNICAL])
 
 
 def test_build_bounded_digest_text_reports_still_over_budget_when_absurdly_tight():

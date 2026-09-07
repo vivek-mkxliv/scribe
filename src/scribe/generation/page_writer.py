@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from pathlib import Path
 
 from scribe.constants import DOC_END_MARKER
 from scribe.generation import qa, writer
@@ -176,6 +177,7 @@ def generate_with_repair(
     temperature: float | None = None,
     max_tokens: int | None = None,
     known_doc_ids: set[str] | None = None,
+    known_cli_flags: set[str] | None = None,
 ) -> dict[str, str]:
     """Call the LLM, validating (structure + QA) and re-prompting on failure.
 
@@ -220,7 +222,9 @@ def generate_with_repair(
             last_dead_link_only_issues = None
             on_status(f"Validation failed (attempt {attempt + 1}): {last_issue_description}")
         else:
-            qa_report = qa.review_documents(validation.found, known_doc_ids=resolved_known_doc_ids)
+            qa_report = qa.review_documents(
+                validation.found, known_doc_ids=resolved_known_doc_ids, known_cli_flags=known_cli_flags
+            )
             if qa_report.ok:
                 return validation.found
             last_issue_description = qa_report.describe()
@@ -232,7 +236,7 @@ def generate_with_repair(
         if attempt == max_repair_attempts:
             break
 
-        followup = build_repair_followup(last_issue_description)
+        followup = build_repair_followup(last_issue_description, expected_doc_id=single_page_id)
         conversation_prompt = (
             f"{prompt}\n\n---PREVIOUS RESPONSE (INVALID)---\n{response}\n\n---INSTRUCTIONS---\n{followup}"
         )
@@ -272,12 +276,19 @@ def generate_pages(
     temperature: float | None = None,
     max_tokens: int | None = None,
     all_doc_ids: list[str] | None = None,
+    known_cli_flags: set[str] | None = None,
+    output_dir: Path | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     """Generate every page with its own LLM call (and its own repair/truncation handling).
 
     `all_doc_ids` is the full doc plan (defaults to just `pages`' own ids if not given) --
     passed to QA's dead-link check so cross-links to sibling pages not in `pages` aren't
     incorrectly flagged, e.g. when generating a subset of a larger suite.
+
+    `output_dir`, if given, writes each page to disk (`writer.write_document`) immediately after
+    it's generated -- rather than only once the entire suite finishes -- so a status line like
+    "Generated 'x.md'." corresponds to a file that's actually on disk at that moment, and a run
+    interrupted partway through still leaves every already-generated page in place.
 
     Returns `({doc_id: body}, failed_page_ids)`. A page that still can't be produced after every
     fallback gets a clearly marked placeholder body instead of aborting the whole run.
@@ -298,11 +309,16 @@ def generate_pages(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 known_doc_ids=known_doc_ids,
+                known_cli_flags=known_cli_flags,
             )
             documents.update(result)
+            if output_dir is not None:
+                writer.write_document(page.id, result[page.id], output_dir)
             on_status(f"Generated '{page.id}'.")
         except GenerationFailedError as exc:
             on_status(f"Giving up on '{page.id}' after all fallbacks ({exc}); writing a placeholder instead.")
             documents[page.id] = _stub_body(page, exc)
+            if output_dir is not None:
+                writer.write_document(page.id, documents[page.id], output_dir)
             failed_page_ids.append(page.id)
     return documents, failed_page_ids

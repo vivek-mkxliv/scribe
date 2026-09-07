@@ -9,7 +9,12 @@ import pytest
 from scribe.config import ScribeConfig
 from scribe.constants import DOC_SUITE, AudienceMode
 from scribe.generation.doc_plan import PLANNER_MARKER
-from scribe.pipeline import OverwriteConfirmationRequiredError, check_drift, run
+from scribe.pipeline import (
+    OverwriteConfirmationRequiredError,
+    TokenEstimateConfirmationRequiredError,
+    check_drift,
+    run,
+)
 from scribe.providers import llm_client
 
 VALID_RESPONSE = "\n".join(
@@ -270,15 +275,19 @@ def test_overwrite_confirmation_bypassed_with_assume_yes(tmp_path, monkeypatch):
     assert {p.name for p in written} == set(DOC_SUITE[AudienceMode.LEAN_TECHNICAL])
 
 
-def test_regenerating_scribes_own_prior_output_never_reprompts(tmp_path, monkeypatch):
-    """Once a manifest exists, output_dir is scribe's own; overwriting it again never nags."""
+def test_regenerating_scribes_own_prior_output_never_reprompts_about_overwriting(tmp_path, monkeypatch):
+    """Once a manifest exists, output_dir is scribe's own; overwriting it again never nags --
+    but a real regeneration still requires a token-estimate confirmation (a separate, always-on
+    concern about cost, not file safety) unless `assume_yes` is set."""
     _write(tmp_path / "repo" / "a.py", "import os\n")
     fake_client = FakeLLMClient()
     monkeypatch.setattr(llm_client, "build_client", lambda *a, **k: fake_client)
 
     run(_config(tmp_path, assume_yes=True))
     _write(tmp_path / "repo" / "b.py", "import sys\n")  # force a real regeneration, not a skip
-    run(_config(tmp_path, assume_yes=False))  # no confirmation needed, no exception
+    with pytest.raises(TokenEstimateConfirmationRequiredError):
+        run(_config(tmp_path, assume_yes=False))  # not an OverwriteConfirmationRequiredError
+    run(_config(tmp_path, assume_yes=True))  # proceeds fine once cost is confirmed
 
 
 def test_check_drift_reports_no_manifest(tmp_path):
