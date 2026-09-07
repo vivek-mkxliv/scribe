@@ -26,8 +26,12 @@ tiktoken = ["tiktoken>=0.7"]
 # tree-sitter grammars + networkx/numpy -- a real cost on locked-down/air-gapped
 # machines, which is exactly the audience that still has the native fallback extractor.
 graphifyy = ["graphifyy>=0.9"]
+# Opt-in TUI (`scribe tui`) -- pure-Python, MIT, same maintainers as `rich` (already a hard
+# dependency), but kept optional so the zero-dependency default (`scribe gui`, the browser UI)
+# is unaffected for users who never touch the TUI.
+tui = ["textual>=0.60"]
 dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
-all = ["anthropic>=0.34", "tiktoken>=0.7", "graphifyy>=0.9"]
+all = ["anthropic>=0.34", "tiktoken>=0.7", "graphifyy>=0.9", "textual>=0.60"]
 
 [project.scripts]
 scribe = "scribe.cli:cli"
