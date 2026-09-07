@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S.C.R.I.B.E.</title>
+<style>
+  :root {
+    color-scheme: dark;
+    /* Surfaces */
+    --bg: #0b0f19;
+    --card-bg: #111827;
+    --bg-input: #1f2937;
+    --bg-log: #030712;
+    --border: #1f2937;
+    --border-input: #374151;
+
+    /* Typography */
+    --text: #f9fafb;
+    --text-dim: #9ca3af;
+    --text-placeholder: #6b7280;
+
+    /* Interactive & status */
+    --accent: #0284c7;
+    --accent-hover: #0369a1;
+    --accent-cyan: #38bdf8;
+    --ok: #00c98a;
+    --warn: #d97706;
+    --danger-bg: rgba(239, 68, 68, 0.15);
+    --danger-border: #991b1b;
+    --danger-text: #fca5a5;
+
+    --radius: 8px;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.35);
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding-bottom: 3rem;
+  }
+  header {
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    padding: 1.25rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { font-size: 1.15rem; margin: 0; font-weight: 600; letter-spacing: 0.02em; display: flex; align-items: baseline; gap: 0.6rem; color: var(--text); }
+  header h1 .separator { opacity: 0.45; font-weight: 400; }
+  header h1 .full-name { font-size: 0.78rem; font-weight: 500; color: var(--text-dim); letter-spacing: 0.01em; }
+  header .repo-badge {
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: 0.8rem;
+    background: var(--bg-input);
+    color: var(--accent-cyan);
+    padding: 0.35rem 0.8rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-input);
+    max-width: 55vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  header .repo-badge .repo-label { font-weight: 700; color: var(--text-dim); margin-right: 0.35em; }
+  main {
+    max-width: 1240px;
+    margin: 1.6rem auto 0;
+    padding: 0 1.25rem;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: stretch;
+    gap: 1.25rem;
+  }
+  .col { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }
+  .col.log-col, .log-card { display: flex; flex-direction: column; }
+  .log-card { flex: 1; }
+  @media (max-width: 720px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1.25rem 1.4rem 1.5rem;
+  }
+  .card > h2 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin: 0 0 1rem;
+    font-weight: 600;
+  }
+  label {
+    display: block;
+    margin: 0.7rem 0 0.3rem;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+  }
+  .card > .grid-2:first-of-type > div > label:first-child { margin-top: 0; }
+  input[type=text], input[type=number], input[type=password], select {
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.92rem;
+    border: 1px solid var(--border-input);
+    border-radius: 7px;
+    background: var(--bg-input);
+    color: var(--text);
+    transition: border-color 0.15s;
+  }
+  input::placeholder { color: var(--text-placeholder); }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent-cyan);
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18);
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.2rem; margin-bottom: 0.5rem; }
+  .grid-2:last-child { margin-bottom: 0; }
+
+  .toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.7rem;
+    padding: 0.4rem 0.85rem;
+    border-radius: 999px;
+    border: 1px solid var(--danger-border);
+    background: var(--danger-bg);
+    color: var(--danger-text);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .toggle-btn .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .toggle-btn.on {
+    border-color: var(--ok);
+    background: rgba(0, 201, 138, 0.15);
+    color: var(--ok);
+  }
+
+  .btn {
+    appearance: none;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    padding: 0.55rem 1.1rem;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.05s, filter 0.15s;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-secondary { background: var(--bg-input); color: #d1d5db; border-color: var(--border-input); }
+  .btn-secondary:hover:not(:disabled) { filter: brightness(1.15); }
+  .btn-danger { background: var(--danger-bg); color: var(--danger-text); border-color: var(--danger-border); }
+  .btn-danger:hover:not(:disabled) { filter: brightness(1.15); }
+  .btn-row { display: flex; gap: 0.7rem; margin-top: 0.95rem; flex-wrap: wrap; }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 0.3rem 0.75rem;
+    border-radius: 999px;
+    background: #1e293b;
+    color: #94a3b8;
+  }
+  .status-pill.running { background: rgba(2, 132, 199, 0.18); color: var(--accent-cyan); }
+  .status-pill.ok { background: rgba(0, 201, 138, 0.15); color: var(--ok); }
+  .status-pill.error { background: var(--danger-bg); color: var(--danger-text); }
+  .status-pill .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: currentColor;
+  }
+  .status-pill.running .dot { animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+  #generateRow { display: flex; align-items: center; gap: 0.9rem; }
+
+  #confirmCard {
+    display: none;
+    border-color: var(--warn);
+    background: rgba(217, 119, 6, 0.07);
+  }
+  #confirmCard h2 { color: var(--warn); }
+  #confirmMessage { font-size: 0.9rem; line-height: 1.5; white-space: pre-wrap; }
+
+  #log {
+    background: var(--bg-log);
+    color: #e5e7eb;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.9rem 1rem;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    font-size: 0.8rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+  }
+  #log:empty::before { content: "No output yet -- click Generate to start."; color: #6b7280; }
+
+  footer {
+    max-width: 1240px;
+    margin: 0.5rem auto 0;
+    padding: 0 1.25rem;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>&#128220; S.C.R.I.B.E. <span class="separator">|</span> <span class="full-name">System Context &amp; Repository Intelligence Bridge Engine</span></h1>
+  <span class="repo-badge"><span class="repo-label">Current Repo:</span><span id="repoPath"></span></span>
+</header>
+
+<main>
+  <div class="col">
+  <section class="card">
+    <h2>Preset</h2>
+    <div class="grid-2">
+      <div>
+        <label for="presetSelect">Load preset</label>
+        <select id="presetSelect"><option value="">(none)</option></select>
+      </div>
+      <div>
+        <label for="presetName">Save as</label>
+        <input type="text" id="presetName" placeholder="e.g. quick-draft">
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="savePresetBtn" type="button">Save preset</button>
+      <button class="btn btn-danger" id="deletePresetBtn" type="button">Delete selected</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Configuration</h2>
+    <div class="grid-2">
+      <div>
+        <label for="mode">Mode</label>
+        <select id="mode">
+          <option value="lean_technical">lean_technical</option>
+          <option value="operator_split">operator_split</option>
+        </select>
+      </div>
+      <div>
+        <label for="outputDir">Output directory</label>
+        <input type="text" id="outputDir" value="docs">
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="provider">Provider <span style="opacity:.6">(blank = auto-detect)</span></label>
+        <input type="text" id="provider" placeholder="ollama / anthropic / openai / ...">
+      </div>
+      <div>
+        <label for="model">Model <span style="opacity:.6">(blank = provider default)</span></label>
+        <input type="text" id="model">
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="apiKey">API key <span style="opacity:.6">(blank = env var)</span></label>
+        <input type="password" id="apiKey">
+      </div>
+      <div>
+        <label for="maxTokens">Max output tokens</label>
+        <input type="number" id="maxTokens" placeholder="(provider default)">
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="temperature">Temperature</label>
+        <input type="number" step="0.1" id="temperature" placeholder="(provider default)">
+      </div>
+      <div>
+        <label for="tokenBudget">Digest token budget</label>
+        <input type="number" id="tokenBudget">
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="maxRepairAttempts">Max repair attempts</label>
+        <input type="number" id="maxRepairAttempts">
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <button type="button" class="toggle-btn" id="chunked" data-on="false" aria-pressed="false">
+          <span class="dot"></span><span class="toggle-label">Force chunked generation: Off</span>
+        </button>
+      </div>
+      <div>
+        <button type="button" class="toggle-btn" id="verbose" data-on="true" aria-pressed="true">
+          <span class="dot"></span><span class="toggle-label">Verbose logging: On</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" id="confirmCard">
+    <h2>&#9888;&#65039; Confirmation needed</h2>
+    <p id="confirmMessage"></p>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="confirmYesBtn" type="button">Proceed</button>
+      <button class="btn btn-secondary" id="confirmNoBtn" type="button">Cancel</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div id="generateRow">
+      <button class="btn btn-primary" id="generateBtn" type="button">Generate</button>
+      <span class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">Idle</span></span>
+    </div>
+  </section>
+  </div>
+
+  <div class="col log-col">
+  <section class="card log-card">
+    <h2>Log</h2>
+    <div id="log"></div>
+  </section>
+  </div>
+</main>
+
+<footer>Runs entirely on your machine -- bound to 127.0.0.1, no data leaves this process except to your chosen LLM provider.</footer>
+
+<script>
+const repoPath = new URLSearchParams(location.search).get("repo") || "";
+document.getElementById("repoPath").textContent = repoPath;
+
+const $ = (id) => document.getElementById(id);
+let pollTimer = null;
+
+function setStatus(kind, text) {
+  const pill = $("statusPill");
+  pill.className = "status-pill" + (kind ? " " + kind : "");
+  $("statusText").textContent = text;
+}
+
+function currentForm() {
+  return {
+    mode: $("mode").value,
+    provider: $("provider").value,
+    model: $("model").value,
+    api_key: $("apiKey").value,
+    output_dir: $("outputDir").value,
+    max_tokens: $("maxTokens").value,
+    temperature: $("temperature").value,
+    token_budget: $("tokenBudget").value,
+    max_repair_attempts: $("maxRepairAttempts").value,
+    chunked: isToggleOn("chunked"),
+    verbose: isToggleOn("verbose"),
+  };
+}
+
+function isToggleOn(id) {
+  return $(id).dataset.on === "true";
+}
+
+function setToggle(id, on) {
+  const el = $(id);
+  const label = el.dataset.label;
+  el.dataset.on = on ? "true" : "false";
+  el.classList.toggle("on", on);
+  el.setAttribute("aria-pressed", on ? "true" : "false");
+  el.querySelector(".toggle-label").textContent = label + (on ? ": On" : ": Off");
+}
+
+function initToggle(id, label) {
+  const el = $(id);
+  el.dataset.label = label;
+  el.addEventListener("click", () => setToggle(id, !isToggleOn(id)));
+}
+
+initToggle("chunked", "Force chunked generation");
+initToggle("verbose", "Verbose logging");
+setToggle("chunked", false);
+setToggle("verbose", true); // GUI always defaults to verbose logging
+
+function applyForm(values) {
+  if (!values) return;
+  if (values.mode) $("mode").value = values.mode;
+  if (values.provider) $("provider").value = values.provider;
+  if (values.model) $("model").value = values.model;
+  if (values.output_dir) $("outputDir").value = values.output_dir;
+  if (values.max_tokens != null) $("maxTokens").value = values.max_tokens;
+  if (values.temperature != null) $("temperature").value = values.temperature;
+  if (values.token_budget != null) $("tokenBudget").value = values.token_budget;
+  if (values.max_repair_attempts != null) $("maxRepairAttempts").value = values.max_repair_attempts;
+  if (values.chunked != null) setToggle("chunked", !!values.chunked);
+  // Note: `verbose` is intentionally NOT restored from a preset/scribe.toml -- the GUI's log
+  // pane always shows full per-status detail regardless of this toggle, and it should always
+  // default back to on for a new session rather than persist an old preset's value.
+}
+
+async function loadDefaults(presetName) {
+  const url = "/api/form-defaults?repo=" + encodeURIComponent(repoPath) +
+    (presetName ? "&preset=" + encodeURIComponent(presetName) : "");
+  const resp = await fetch(url);
+  applyForm(await resp.json());
+}
+
+async function loadPresetList() {
+  const resp = await fetch("/api/presets?repo=" + encodeURIComponent(repoPath));
+  const data = await resp.json();
+  const select = $("presetSelect");
+  select.innerHTML = '<option value="">(none)</option>';
+  for (const name of Object.keys(data.presets || {})) {
+    const opt = document.createElement("option");
+    opt.value = name; opt.textContent = name;
+    select.appendChild(opt);
+  }
+}
+
+$("presetSelect").addEventListener("change", (e) => loadDefaults(e.target.value));
+
+$("savePresetBtn").addEventListener("click", async () => {
+  const name = $("presetName").value.trim();
+  if (!name) { alert("Enter a preset name first."); return; }
+  await fetch("/api/presets/" + encodeURIComponent(name) + "?repo=" + encodeURIComponent(repoPath), {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(currentForm()),
+  });
+  await loadPresetList();
+});
+
+$("deletePresetBtn").addEventListener("click", async () => {
+  const name = $("presetSelect").value;
+  if (!name) return;
+  await fetch("/api/presets/" + encodeURIComponent(name) + "?repo=" + encodeURIComponent(repoPath), {
+    method: "DELETE",
+  });
+  await loadPresetList();
+});
+
+async function poll() {
+  const resp = await fetch("/api/status");
+  const state = await resp.json();
+  $("log").textContent = state.messages.join("\n");
+  $("log").scrollTop = $("log").scrollHeight;
+  if (state.confirmation) {
+    $("confirmCard").style.display = "block";
+    $("confirmMessage").textContent = state.confirmation.message;
+  }
+  if (!state.running) {
+    clearInterval(pollTimer);
+    $("generateBtn").disabled = false;
+    if (state.error) {
+      setStatus("error", "Failed: " + state.error);
+    } else if (state.confirmation) {
+      setStatus("", "Waiting for confirmation");
+    } else {
+      setStatus("ok", "Done -- " + state.written.length + " file(s) written");
+      $("log").textContent += "\n" + state.written.map((p) => "-> " + p).join("\n");
+    }
+  }
+}
+
+async function startGenerate(confirmed) {
+  $("confirmCard").style.display = "none";
+  setStatus("running", "Running");
+  $("generateBtn").disabled = true;
+  await fetch("/api/generate?repo=" + encodeURIComponent(repoPath), {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({form: currentForm(), confirmed: !!confirmed}),
+  });
+  pollTimer = setInterval(poll, 800);
+}
+
+$("generateBtn").addEventListener("click", () => startGenerate(false));
+$("confirmYesBtn").addEventListener("click", () => startGenerate(true));
+$("confirmNoBtn").addEventListener("click", () => {
+  $("confirmCard").style.display = "none";
+  $("generateBtn").disabled = false;
+  setStatus("", "Cancelled");
+});
+
+loadDefaults(null);
+loadPresetList();
+</script>
+</body>
+</html>
